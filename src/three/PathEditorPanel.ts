@@ -1,7 +1,7 @@
 import type { LoopMode } from '../core/PathCursor';
 import type { CurveType } from '../core/types';
 import type { EditorViewOptions } from '../editor/EditorState';
-import type { PathEditor } from './PathEditor';
+import { EDITOR_UI_ATTRIBUTE, type PathEditor } from './PathEditor';
 
 export interface PathEditorPanelOptions {
   /** Where to mount the panel. Default `document.body`. */
@@ -66,6 +66,7 @@ export class PathEditorPanel {
     injectStyle();
     const el = (this.element = document.createElement('div'));
     el.className = `tpe-panel ${options.position ?? 'top-right'}${options.collapsed ? ' collapsed' : ''}`;
+    el.setAttribute(EDITOR_UI_ATTRIBUTE, '');
     el.innerHTML = this.template();
     const container = options.container ?? document.body;
     if (container !== document.body && getComputedStyle(container).position === 'static') {

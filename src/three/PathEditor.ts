@@ -70,6 +70,12 @@ export interface PathEditorOptions {
   enabled?: boolean;
   /** Maximum undo steps. Default 100. */
   historyLimit?: number;
+  /**
+   * Warn once (console) when a pointer press inside `domElement`'s area lands
+   * on another element, i.e. something covers the canvas and the editor never
+   * sees the click. The `inputblocked` event fires either way. Default true.
+   */
+  diagnostics?: boolean;
 }
 
 export interface PathEditorEvents {
@@ -86,6 +92,11 @@ export interface PathEditorEvents {
   preview: PathPreview | null;
   /** Undo/redo availability changed. */
   history: { canUndo: boolean; canRedo: boolean };
+  /**
+   * A pointer press inside `domElement`'s area was received by another element
+   * (an overlay covering the canvas), so the editor could not handle it.
+   */
+  inputblocked: { target: Element; event: PointerEvent };
 }
 
 export interface PickResult {
@@ -106,6 +117,8 @@ export interface CreatePathOptions extends PathOptions {
 type TransformControlsLike = TransformControls & { getHelper?: () => Object3D };
 
 const CLICK_TOLERANCE_PX = 5;
+/** Elements carrying this attribute (the panel, host dev UI) are never reported as blocking input. */
+export const EDITOR_UI_ATTRIBUTE = 'data-path-editor-ui';
 const _v = new Vector3();
 const _ndc = new Vector2();
 
@@ -137,6 +150,8 @@ export class PathEditor {
   private readonly helpers = new Group();
   private readonly gizmoProxy = new Object3D();
   private readonly keyboardShortcuts: boolean;
+  private readonly diagnostics: boolean;
+  private blockedInputWarned = false;
   private transformControls: TransformControlsLike | null = null;
   private _enabled = false;
   private dragging = false;
@@ -162,6 +177,7 @@ export class PathEditor {
     this.placement = options.placement ?? planePlacement();
     this.keyboardShortcuts = options.keyboardShortcuts ?? true;
     this.mirrorBezierHandles = options.mirrorBezierHandles ?? true;
+    this.diagnostics = options.diagnostics ?? true;
     this.renderOptions = options.render ?? {};
     this.state = new EditorState(options.view);
     this.history = new EditorHistory(this.state, { limit: options.historyLimit });
@@ -239,6 +255,7 @@ export class PathEditor {
     this.domElement.addEventListener('pointerdown', this.onPointerDown, { capture: true });
     this.domElement.addEventListener('pointerup', this.onPointerUp);
     this.domElement.addEventListener('dblclick', this.onDoubleClick);
+    if (typeof window !== 'undefined') window.addEventListener('pointerdown', this.onWindowPointerDown, { capture: true });
     if (this.keyboardShortcuts && typeof window !== 'undefined') this.unbindShortcuts = bindShortcuts(this);
     this.syncSelection();
     this.events.emit('enabled', true);
@@ -252,6 +269,7 @@ export class PathEditor {
     this.domElement.removeEventListener('pointerdown', this.onPointerDown, { capture: true });
     this.domElement.removeEventListener('pointerup', this.onPointerUp);
     this.domElement.removeEventListener('dblclick', this.onDoubleClick);
+    if (typeof window !== 'undefined') window.removeEventListener('pointerdown', this.onWindowPointerDown, { capture: true });
     this.unbindShortcuts?.();
     this.unbindShortcuts = null;
     if (this.transformControls) {
@@ -693,6 +711,26 @@ export class PathEditor {
     else this.state.select(hit.path.id, hit.waypointIndex, hit.handle);
   };
 
+  /** Detects overlays that swallow presses meant for `domElement` (see `diagnostics`). */
+  private readonly onWindowPointerDown = (e: PointerEvent): void => {
+    const target = e.target;
+    if (!(target instanceof Element) || this.domElement.contains(target)) return;
+    if (target.closest(`[${EDITOR_UI_ATTRIBUTE}]`)) return;
+    const rect = this.domElement.getBoundingClientRect();
+    const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+    if (!inside || rect.width === 0 || rect.height === 0) return;
+    this.events.emit('inputblocked', { target, event: e });
+    if (!this.diagnostics || this.blockedInputWarned) return;
+    this.blockedInputWarned = true;
+    console.warn(
+      `three-path-editor: a click inside the editor area went to ${describeElement(target)} instead of ` +
+        `${describeElement(this.domElement)}, so the editor never saw it. Something covers the canvas. ` +
+        `Give the covering element \`pointer-events: none\` while editing, or pass an element that does ` +
+        `receive the input (and covers the canvas exactly) as the \`domElement\` option. ` +
+        `Add the \`${EDITOR_UI_ATTRIBUTE}\` attribute to your own dev UI to exclude it from this check.`,
+    );
+  };
+
   /** Double-click on a curve inserts a waypoint there. */
   private readonly onDoubleClick = (e: MouseEvent): void => {
     if (this.dragging) return;
@@ -857,6 +895,13 @@ export class PathEditor {
   private assertNotDisposed(): void {
     if (this.disposed) throw new Error('PathEditor has been disposed.');
   }
+}
+
+/** `tag#id.class` for diagnostics. */
+function describeElement(el: Element): string {
+  const id = el.id ? `#${el.id}` : '';
+  const classes = typeof el.className === 'string' && el.className.trim() ? `.${el.className.trim().split(/\s+/).join('.')}` : '';
+  return `<${el.tagName.toLowerCase()}${id}${classes}>`;
 }
 
 function isCoordinateSystem(value: unknown): value is CoordinateSystem {

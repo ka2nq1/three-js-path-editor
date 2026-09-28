@@ -241,4 +241,53 @@ describe('PathEditor', () => {
     panel.dispose();
     expect(panel.element.isConnected).toBe(false);
   });
+
+  it('reports overlays that swallow presses meant for the canvas, once', () => {
+    const { editor, domElement } = setup();
+    vi.spyOn(domElement, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 200, 100));
+    Object.assign(domElement, { setPointerCapture: () => {}, releasePointerCapture: () => {} });
+    const overlay = document.createElement('div');
+    overlay.id = 'hud';
+    document.body.appendChild(overlay);
+    const blocked = vi.fn();
+    editor.on('inputblocked', blocked);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    editor.enable();
+    const press = (target: Element, x: number, y: number) =>
+      target.dispatchEvent(new MouseEvent('pointerdown', { clientX: x, clientY: y, bubbles: true }));
+
+    press(overlay, 50, 50);
+    press(overlay, 60, 50);
+    expect(blocked).toHaveBeenCalledTimes(2);
+    expect(blocked.mock.calls[0][0].target).toBe(overlay);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('<div#hud>');
+
+    press(overlay, 500, 50);
+    press(domElement, 50, 50);
+    const panel = new PathEditorPanel(editor);
+    press(panel.element, 50, 50);
+    expect(blocked).toHaveBeenCalledTimes(2);
+
+    editor.disable();
+    press(overlay, 50, 50);
+    expect(blocked).toHaveBeenCalledTimes(2);
+    panel.dispose();
+    overlay.remove();
+    warn.mockRestore();
+  });
+
+  it('can silence the blocked-input warning', () => {
+    const scene = new Scene();
+    const domElement = document.createElement('canvas');
+    document.body.appendChild(domElement);
+    vi.spyOn(domElement, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 200, 100));
+    const editor = new PathEditor({ scene, camera: new PerspectiveCamera(), domElement, diagnostics: false });
+    created.push(editor);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    editor.enable();
+    document.body.dispatchEvent(new MouseEvent('pointerdown', { clientX: 10, clientY: 10, bubbles: true }));
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
 });
