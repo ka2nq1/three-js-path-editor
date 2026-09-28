@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { PerspectiveCamera, Scene } from 'three';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, it } from 'vitest';
 import { FlyControls, PathEditor } from '../src/three';
 import { expectVecClose } from './helpers';
 
