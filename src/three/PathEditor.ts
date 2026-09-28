@@ -7,6 +7,7 @@ import {
   MeshBasicMaterial,
   Object3D,
   Plane,
+  Quaternion,
   Raycaster,
   Vector2,
   Vector3,
@@ -76,6 +77,12 @@ export interface PathEditorOptions {
    * sees the click. The `inputblocked` event fires either way. Default true.
    */
   diagnostics?: boolean;
+  /**
+   * Remember the camera's position/rotation on `enable()` and put it back on
+   * `disable()`, so flying around while editing doesn't leave the game camera
+   * somewhere else. Default false.
+   */
+  restoreCameraOnDisable?: boolean;
 }
 
 export interface PathEditorEvents {
@@ -152,6 +159,8 @@ export class PathEditor {
   private readonly keyboardShortcuts: boolean;
   private readonly diagnostics: boolean;
   private blockedInputWarned = false;
+  private readonly restoreCameraOnDisable: boolean;
+  private savedCameraPose: { position: Vector3; quaternion: Quaternion; camera: Camera } | null = null;
   private transformControls: TransformControlsLike | null = null;
   private _enabled = false;
   private dragging = false;
@@ -178,6 +187,7 @@ export class PathEditor {
     this.keyboardShortcuts = options.keyboardShortcuts ?? true;
     this.mirrorBezierHandles = options.mirrorBezierHandles ?? true;
     this.diagnostics = options.diagnostics ?? true;
+    this.restoreCameraOnDisable = options.restoreCameraOnDisable ?? false;
     this.renderOptions = options.render ?? {};
     this.state = new EditorState(options.view);
     this.history = new EditorHistory(this.state, { limit: options.historyLimit });
@@ -249,6 +259,13 @@ export class PathEditor {
     this.assertNotDisposed();
     if (this._enabled) return this;
     this._enabled = true;
+    if (this.restoreCameraOnDisable) {
+      this.savedCameraPose = {
+        camera: this.camera,
+        position: this.camera.position.clone(),
+        quaternion: this.camera.quaternion.clone(),
+      };
+    }
     this.scene.add(this.root);
     const tc = this.ensureTransformControls();
     tc.enabled = true;
@@ -278,6 +295,13 @@ export class PathEditor {
     }
     this.endDrag();
     this.root.removeFromParent();
+    if (this.savedCameraPose) {
+      const { camera, position, quaternion } = this.savedCameraPose;
+      camera.position.copy(position);
+      camera.quaternion.copy(quaternion);
+      camera.updateMatrixWorld();
+      this.savedCameraPose = null;
+    }
     this.events.emit('enabled', false);
     return this;
   }

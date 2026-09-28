@@ -6,6 +6,7 @@
  */
 export * from '../index';
 export * from '../editor';
+export * from './FlyControls';
 export * from './PathEditor';
 export * from './PathEditorPanel';
 export * from './PathPreview';
