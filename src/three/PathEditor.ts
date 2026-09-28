@@ -116,6 +116,32 @@ export interface PickResult {
   t: number | null;
 }
 
+/** What `saveSession()` stores so editing can resume after a page reload. */
+export interface EditorSessionState {
+  version: 1;
+  enabled: boolean;
+  selection: EditorSelection;
+  view: EditorViewOptions;
+  camera: { position: number[]; quaternion: number[] };
+}
+
+export interface SessionStorageLike {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+export interface RestoreSessionOptions {
+  /** Also restore the camera pose. Default true. */
+  camera?: boolean;
+  /** Keep the stored state instead of consuming it. Default false. */
+  keep?: boolean;
+  /** Default `sessionStorage`. */
+  storage?: SessionStorageLike;
+}
+
+export const DEFAULT_SESSION_KEY = 'three-path-editor:session';
+
 export interface CreatePathOptions extends PathOptions {
   /** Select the new path. Default true. */
   select?: boolean;
@@ -625,6 +651,68 @@ export class PathEditor {
     this.events.emit('preview', null);
   }
 
+  // ----------------------------------------------------------------- session
+
+  /**
+   * Stores whether the editor is on, the selection, view toggles and the
+   * camera pose in `sessionStorage`, so `restoreSession()` can pick up where
+   * you were after a reload (e.g. right before saving a path file that makes
+   * the dev server reload the page). Returns false if storage is unavailable.
+   */
+  saveSession(key = DEFAULT_SESSION_KEY, storage: SessionStorageLike | undefined = defaultSessionStorage()): boolean {
+    if (!storage) return false;
+    const state: EditorSessionState = {
+      version: 1,
+      enabled: this._enabled,
+      selection: { ...this.selection },
+      view: { ...this.view },
+      camera: { position: this.camera.position.toArray(), quaternion: this.camera.quaternion.toArray() },
+    };
+    try {
+      storage.setItem(key, JSON.stringify(state));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Applies a state stored by `saveSession()`: view toggles, selection (paths
+   * that no longer exist are skipped), and, if the editor was on, enables it
+   * and restores the camera pose. Consumed by default. Returns false when
+   * nothing usable was stored.
+   */
+  restoreSession(key = DEFAULT_SESSION_KEY, options: RestoreSessionOptions = {}): boolean {
+    const storage = options.storage ?? defaultSessionStorage();
+    if (!storage) return false;
+    let state: Partial<EditorSessionState> | null = null;
+    try {
+      const raw = storage.getItem(key);
+      if (!options.keep) storage.removeItem(key);
+      state = raw ? (JSON.parse(raw) as Partial<EditorSessionState>) : null;
+    } catch {
+      return false;
+    }
+    if (!state || state.version !== 1) return false;
+    if (state.view) this.setView(state.view);
+    const selection = state.selection;
+    if (selection?.pathId && this.getPath(selection.pathId)) {
+      const path = this.getPath(selection.pathId)!;
+      const index = selection.waypointIndex !== null && selection.waypointIndex < path.waypoints.length ? selection.waypointIndex : null;
+      this.select(path.id, index, index === null ? null : selection.handle);
+    }
+    if (state.enabled) {
+      this.enable();
+      const camera = state.camera;
+      if ((options.camera ?? true) && camera?.position?.length === 3 && camera.quaternion?.length === 4) {
+        this.camera.position.fromArray(camera.position);
+        this.camera.quaternion.fromArray(camera.quaternion);
+        this.camera.updateMatrixWorld();
+      }
+    }
+    return true;
+  }
+
   // ---------------------------------------------------------------- picking
 
   /** Raycasts editor objects under a screen position (client coordinates). */
@@ -918,6 +1006,14 @@ export class PathEditor {
 
   private assertNotDisposed(): void {
     if (this.disposed) throw new Error('PathEditor has been disposed.');
+  }
+}
+
+function defaultSessionStorage(): SessionStorageLike | undefined {
+  try {
+    return typeof sessionStorage === 'undefined' ? undefined : sessionStorage;
+  } catch {
+    return undefined;
   }
 }
 

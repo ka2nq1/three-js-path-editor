@@ -13,6 +13,12 @@ export interface PathEditorPanelOptions {
   fileName?: string;
   /** Replace the default "download file" export behaviour. */
   onExport?: (json: string) => void;
+  /**
+   * Shows a Save button that hands the exported JSON to this function, e.g.
+   * `(json) => saveToDevServer(json)`. A returned promise drives the status
+   * line ("Saving…", "Saved.", or the rejection message).
+   */
+  onSave?: (json: string) => unknown;
   collapsed?: boolean;
   /** Ask before deleting a path. Default true. */
   confirmDelete?: boolean;
@@ -232,6 +238,16 @@ export class PathEditorPanel {
       case 'stop':
         editor.detachPreview();
         break;
+      case 'save': {
+        const save = this.options.onSave;
+        if (!save) break;
+        this.status('Saving…');
+        Promise.resolve()
+          .then(() => save(editor.exportString()))
+          .then(() => this.status(`Saved ${editor.paths.length} path(s).`))
+          .catch((err: unknown) => this.status(`Save failed: ${err instanceof Error ? err.message : String(err)}`));
+        break;
+      }
       case 'export': {
         const json = editor.exportString();
         if (this.options.onExport) this.options.onExport(json);
@@ -346,7 +362,7 @@ export class PathEditorPanel {
   </section>
   <section>
     <h4>JSON</h4>
-    <div class="tpe-row"><button data-act="export">Export</button><button data-act="copy">Copy</button><button data-act="import">Import…</button>
+    <div class="tpe-row">${this.options.onSave ? '<button data-act="save" data-el="save">Save</button>' : ''}<button data-act="export">Export</button><button data-act="copy">Copy</button><button data-act="import">Import…</button>
     <input type="file" accept=".json,application/json" data-el="file" style="display:none"></div>
     <div class="tpe-status" data-el="status"></div>
     <div class="tpe-hint">Click: select · Shift+click empty: add point · Shift+click / double-click curve: insert point · Del: delete · [ ]: prev/next · Alt+[ ]: reorder · G: gizmo · Cmd/Ctrl+Z: undo · Shift+Cmd/Ctrl+Z: redo</div>
