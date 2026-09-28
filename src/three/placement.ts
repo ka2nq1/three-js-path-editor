@@ -1,4 +1,4 @@
-import { Plane, Vector3, type Object3D, type Raycaster } from 'three';
+import { Plane, Raycaster, Vector3, type Object3D } from 'three';
 import type { Path } from '../core/Path';
 
 export interface PlacementContext {
@@ -77,5 +77,57 @@ export function objectPlacement(
       return point;
     }
     return fallback ? fallback(ctx) : null;
+  };
+}
+
+export interface ConstraintContext {
+  path: Path;
+  /** Index of the waypoint being placed or moved. */
+  waypointIndex: number;
+  /** Proposed world position. Return a new vector (or mutate and return this one). */
+  position: Vector3;
+}
+
+/**
+ * Adjusts a waypoint's world position whenever the editor places or moves it
+ * (gizmo drag, Shift+click, insert, typed coordinates). Return the position to
+ * use, or null/undefined to keep the proposal unchanged.
+ */
+export type WaypointConstraint = (ctx: ConstraintContext) => Vector3 | null | undefined | void;
+
+export interface SurfaceConstraintOptions {
+  /** Distance kept above the surface, along `up`. Default 0. */
+  offset?: number;
+  /** World up direction. Default [0, 1, 0]. */
+  up?: [number, number, number];
+  /** How far above the proposal the downward ray starts. Default 10000. */
+  castHeight?: number;
+  recursive?: boolean;
+  /** Only constrain these paths. Default: every path. */
+  filter?: (path: Path) => boolean;
+}
+
+/**
+ * Keeps waypoints on top of the given objects (terrain, floors, roads): the
+ * position is dropped straight down (along -up) onto the highest surface
+ * under it. Horizontal movement stays free. Positions with nothing below are
+ * left unchanged.
+ */
+export function surfaceConstraint(
+  objects: Object3D[] | (() => Object3D[]),
+  options: SurfaceConstraintOptions = {},
+): WaypointConstraint {
+  const up = new Vector3(...(options.up ?? [0, 1, 0])).normalize();
+  const down = up.clone().negate();
+  const castHeight = options.castHeight ?? 10000;
+  const raycaster = new Raycaster();
+  return ({ path, position }) => {
+    if (options.filter && !options.filter(path)) return null;
+    const targets = typeof objects === 'function' ? objects() : objects;
+    raycaster.set(position.clone().addScaledVector(up, castHeight), down);
+    raycaster.far = castHeight * 2;
+    const hit = raycaster.intersectObjects(targets, options.recursive ?? true).find((h) => !h.object.userData.pathEditor);
+    if (!hit) return null;
+    return hit.point.clone().addScaledVector(up, options.offset ?? 0);
   };
 }

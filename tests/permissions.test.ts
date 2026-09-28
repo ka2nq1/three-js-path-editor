@@ -46,6 +46,7 @@ describe('labelFormatter', () => {
   it('controls label text, and can hide labels', () => {
     const path = new Path({ id: 'p', points: [[0, 0, 0], { position: [1, 0, 0], metadata: { name: 'gate' } }] });
     const labels = vi.fn(({ waypoint }) => (waypoint.metadata.name as string) ?? null);
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
     const renderer = new ThreePathRenderer(path, { showLabels: true, labelFormatter: labels });
     disposables.push(renderer);
     renderer.update(new PerspectiveCamera(), 800);
@@ -53,6 +54,7 @@ describe('labelFormatter', () => {
     const sprites: unknown[] = [];
     renderer.group.traverse((o) => void (o.type === 'Sprite' && sprites.push(o)));
     expect(sprites).toHaveLength(1);
+    getContext.mockRestore();
   });
 });
 

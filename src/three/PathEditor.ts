@@ -34,7 +34,7 @@ import { averageSpacing, insertWaypointAfter, insertWaypointAtT, shiftWaypoint }
 import { bindShortcuts } from '../editor/shortcuts';
 import { Emitter, type Listener } from '../utils/Emitter';
 import { add, length as vecLength, normalize, scale, sub, toVec3 } from '../utils/vec3';
-import { planePlacement, type PlacementProvider } from './placement';
+import { planePlacement, type PlacementProvider, type WaypointConstraint } from './placement';
 import { PathPreview, type PathPreviewOptions } from './PathPreview';
 import { worldUnitsPerPixel } from './screen';
 import { ThreePathRenderer, type PathPickData, type ThreePathRendererOptions } from './ThreePathRenderer';
@@ -90,6 +90,12 @@ export interface PathEditorOptions {
    * `denied`. Direct `Path` method calls are not checked. Default: allow all.
    */
   canEdit?: (action: EditorAction, context: EditActionContext) => boolean;
+  /**
+   * Adjusts every waypoint position the editor places or moves (gizmo drag,
+   * Shift+click, insert, typed coordinates), e.g. `surfaceConstraint(...)` to
+   * keep ground routes on the terrain. Bezier handles are not constrained.
+   */
+  constrainWaypoint?: WaypointConstraint;
 }
 
 export type EditorAction =
@@ -201,6 +207,8 @@ export class PathEditor {
   camera: Camera;
   cameraControls: { enabled: boolean } | null;
   placement: PlacementProvider;
+  /** See `PathEditorOptions.constrainWaypoint`. Can be replaced at any time. */
+  constrainWaypoint: WaypointConstraint | null;
   mirrorBezierHandles: boolean;
 
   private readonly renderOptions: Omit<ThreePathRendererOptions, 'coordinates'>;
@@ -237,6 +245,7 @@ export class PathEditor {
       : createCoordinateSystem(options.coordinates);
     this.cameraControls = options.cameraControls ?? null;
     this.placement = options.placement ?? planePlacement();
+    this.constrainWaypoint = options.constrainWaypoint ?? null;
     this.keyboardShortcuts = options.keyboardShortcuts ?? true;
     this.mirrorBezierHandles = options.mirrorBezierHandles ?? true;
     this.diagnostics = options.diagnostics ?? true;
@@ -542,6 +551,7 @@ export class PathEditor {
       const after = this.selection.pathId === path.id ? this.selection.waypointIndex : null;
       index = insertWaypointAfter(path, after, options.position);
     }
+    this.applyConstraint(path, index);
     if (options.select ?? true) this.state.select(path.id, index);
     return index;
   }
@@ -573,6 +583,7 @@ export class PathEditor {
     const path = this.getPath(pathId);
     if (!path || !this.allow('addWaypoint', path)) return null;
     const index = insertWaypointAtT(path, t);
+    this.applyConstraint(path, index);
     if (options.select ?? true) this.state.select(path.id, index);
     return index;
   }
@@ -602,7 +613,18 @@ export class PathEditor {
   moveWaypoint(pathId: string, index: number, position: ArrayLike<number>): void {
     const path = this.getPath(pathId);
     if (!path || !path.waypoints[index] || !this.allow('moveWaypoint', path, index)) return;
-    path.moveWaypoint(index, position);
+    path.moveWaypoint(index, this.constrained(path, index, position));
+  }
+
+  /**
+   * Runs `constrainWaypoint` over every waypoint of `pathId` (default: all
+   * paths), e.g. right after `import()` to snap existing routes onto the
+   * terrain. Undoes as one step, like any other synchronous change.
+   */
+  applyConstraints(pathId?: string): void {
+    if (!this.constrainWaypoint) return;
+    const paths = pathId ? [this.getPath(pathId)].filter((p): p is Path => !!p) : this.paths;
+    for (const path of paths) path.waypoints.forEach((_, i) => this.applyConstraint(path, i));
   }
 
   reorderWaypoint(pathId: string, from: number, to: number): void {
@@ -941,7 +963,9 @@ export class PathEditor {
     if (!path || waypointIndex === null) return;
     const p = this.coordinates.toPath(this.gizmoProxy.position.toArray(), path.dimension);
     if (!handle) {
-      path.moveWaypoint(waypointIndex, p);
+      const constrained = this.constrained(path, waypointIndex, p);
+      path.moveWaypoint(waypointIndex, constrained);
+      if (constrained !== p) this.gizmoProxy.position.fromArray(this.coordinates.toWorld(toVec3(constrained), path.dimension));
       return;
     }
     const wp = path.waypoints[waypointIndex];
@@ -956,6 +980,22 @@ export class PathEditor {
       waypointIndex,
       handle === 'in' ? { handleIn: moved, handleOut: mirrored } : { handleOut: moved, handleIn: mirrored },
     );
+  }
+
+  /** `position` (path space) after `constrainWaypoint`; the same array when unchanged. */
+  private constrained(path: Path, waypointIndex: number, position: ArrayLike<number>): ArrayLike<number> {
+    if (!this.constrainWaypoint) return position;
+    const world = new Vector3().fromArray(this.coordinates.toWorld(toVec3(position), path.dimension));
+    const result = this.constrainWaypoint({ path, waypointIndex, position: world });
+    if (!result) return position;
+    return this.coordinates.toPath(result.toArray(), path.dimension);
+  }
+
+  private applyConstraint(path: Path, index: number): void {
+    const wp = path.waypoints[index];
+    if (!wp || !this.constrainWaypoint) return;
+    const next = this.constrained(path, index, wp.position);
+    if (next !== wp.position && Array.from(next).some((v, c) => Math.abs(v - wp.position[c]) > 1e-9)) path.moveWaypoint(index, next);
   }
 
   /** Puts the gizmo on the selected waypoint/handle, or hides it. */
