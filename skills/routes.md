@@ -30,6 +30,7 @@
 | `curve.type` | `"linear"`, `"catmull-rom"` or `"bezier"`. |
 | `curve.closed` | Loop back to the first point. |
 | `curve.tension` | Catmull-Rom tension (0.5 = classic). Also shapes auto Bezier handles. |
+| `curve.parametrization` | Catmull-Rom knot spacing: `"uniform"` (default), `"centripetal"`, `"chordal"`. Same meaning as `THREE.CatmullRomCurve3`'s curveType. Only written when set. |
 | `points[].speed` | Speed multiplier at this point (default 1). Blended between points by the follower's `interpolation`. |
 | `points[].roll` | Bank angle in degrees (default 0, positive = bank right). Applied around the travel direction. |
 | `points[].handleIn/handleOut` | Bezier only, **relative** to the point. Missing = automatic smooth handles. |
@@ -108,6 +109,12 @@ route.getWaypointDistances(); // distance of each waypoint along the path
 
 These return path-space coordinates. For 2D paths or custom coordinate systems, convert with `coordinates.toWorld(point, route.dimension)`.
 
+## Saving from the running game
+
+With Vite: `pathEditorSavePlugin({ file: 'src/paths/level1.paths.json' })` in the config, and a panel `onSave` that calls `saveToDevServer(json)`. The plugin validates the file with the core parser before writing it. See README → "Complex projects".
+
 ## Using metadata
 
 Metadata is free-form and never interpreted by the package. Typical uses: waypoint waits, speed multipliers, animation triggers, spawn markers, camera hints. Keep it JSON-serializable.
+
+Game code that needs specific points should look them up by a stable key (e.g. `metadata.name`), not by index, so inserting points in the editor doesn't shift them. The panel edits metadata as JSON. Protect points your code depends on with `canEdit`.

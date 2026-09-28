@@ -120,6 +120,10 @@ Editor controls: click a point to select it, drag the gizmo to move it, **Shift+
 
 If the game switches cameras, call `editor.setCamera(newCamera)`.
 
+### 5b. Real-game pitfalls (check these every time)
+
+Overlays covering the canvas, the game's own window-level input, cameras locked to a rig, saving back into the project, hardcoded routes and curve mismatches. See [integration.md § H](integration.md). The package gives you the pieces: `inputblocked`, the `enabled` event, `FlyControls`, `restoreCameraOnDisable`, `pathEditorSavePlugin`/`saveToDevServer`, `saveSession`/`restoreSession`, `canEdit`, `constrainWaypoint`/`surfaceConstraint`, `labelFormatter`/`formatWaypoint` and `curve.parametrization`. Keep game-specific behaviour (pausing, hiding HUD, muting input) in the host, inside `editor.on('enabled', ...)`.
+
 ## 6. Add route JSON files
 
 See [routes.md](routes.md). Short version: keep routes in `src/paths/*.paths.json` (bundled with `import`) or `public/paths/` (loaded with `fetch`). Design routes in the editor, click **Export**, and save the file into the project. Preserve unknown fields: the format round-trips them.

@@ -14,6 +14,9 @@ Always start by reading the project. Find the scene, camera, renderer, loop and 
 - [ ] Route JSON lives in the project and is loaded with `parsePathFile` / `getPathFromFile`.
 - [ ] Followers call `follower.update(dt)` from the existing loop.
 - [ ] Production build contains no `three-path-editor/editor` code.
+- [ ] Clicking a path selects it (no `inputblocked` warning in the console). If not, see H.
+- [ ] If the game camera is locked to a rig/player, a free camera is available while editing (H).
+- [ ] The runtime curve and the editor curve match (`curve.parametrization`, H).
 
 ## A. Plain Three.js (module-level objects)
 
@@ -164,3 +167,15 @@ new PathFollower({ object, path, coordinates });
 ```
 
 For a fully custom mapping, implement the `CoordinateSystem` interface (`toWorld`, `toPath`, `directionToWorld`, `planeNormal`).
+
+## H. Real games: HUD overlays, locked cameras, own input, saving
+
+Check these before calling the integration done. Keep every game-specific part in the host project, driven by the `enabled` event. None of it belongs in the package.
+
+1. **Overlays.** Full-screen DOM layers above the canvas (HUD, loader, an invisible "redirect" layer) swallow the editor's clicks. The editor logs the covering element once and emits `inputblocked`. Make those layers `pointer-events: none` while editing, and restore them afterwards. Never touch elements with `data-path-editor-ui` (the panel).
+2. **Game input.** Games often listen on `window` (mouse/touch). In `editor.on('enabled', on => ...)`, stop those events in the capture phase while editing. The editor only needs `pointer*`, `click`, `dblclick` and `keydown`.
+3. **Camera.** If the camera is attached to a rig, use `FlyControls` as `cameraControls`, with `restoreCameraOnDisable: true`. Toggle `fly.enabled` from the `enabled` event and call `fly.update(dt)` in the loop. Hide meshes parented to the camera (weapons, cockpits) while editing, and pause the game (time scale, route followers).
+4. **Saving.** Vite: add `pathEditorSavePlugin({ file })` to the config and `onSave: json => (editor.saveSession(), saveToDevServer(json))` to the panel. Call `editor.restoreSession()` after `import()`. The dev server must be restarted after the config change.
+5. **Hardcoded routes.** If the game keeps routes as constants in code, move the points into the path file and read them from there. Keep any extra per-point data (timings, flags, look targets) in `metadata`. Look points up by a stable `metadata.name` rather than by index, so inserting points doesn't shift them. Then protect named points with `canEdit` (`deleteWaypoint`), and show the names with `labelFormatter` / `formatWaypoint`.
+6. **Curve match.** Set `curve.parametrization` to what the runtime uses (`CatmullRomCurve3(..., 'centripetal')` → `'centripetal'`). If the runtime walks straight segments, use `curve: 'linear'` and deny `editCurve` for those paths.
+7. **Ground routes.** Use `constrainWaypoint: surfaceConstraint(() => [terrain], { filter })`, then `editor.applyConstraints()` after import. Shift+click placement can differ per path: `placement` receives `ctx.path`.

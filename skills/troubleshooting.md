@@ -12,7 +12,15 @@ Run `npx path-editor doctor` first. It finds the scene, camera, renderer, loop, 
 | Paths drawn but markers huge/tiny or picking is off | Wrong camera (not the one rendering) | Pass the active camera; call `editor.setCamera()` on camera switches |
 | Paths hidden | View toggle off | `editor.setView({ paths: true })` |
 | Game renders with `camera.layers` and editor objects are invisible | Editor objects are on layer 0 | `editor.root.traverse(o => o.layers.set(N))` after paths are loaded, or enable layer 0 on the camera in dev |
-| Clicks don't select points | Another element covers the canvas, or wrong `domElement` | Pass the element that receives pointer events as `domElement` |
+| Clicks don't select points | Another element covers the canvas (often an invisible full-screen layer), or wrong `domElement` | Read the console warning / `editor.on('inputblocked')`, which names the covering element. Make it `pointer-events: none` in the `enabled` handler, or pass an element that receives the input and covers the canvas exactly as `domElement` |
+| Panel buttons don't react | Your own CSS/JS made the panel click-through (e.g. `pointer-events: none` on every sibling of the canvas) | Exclude elements with the `data-path-editor-ui` attribute |
+| Can't look around to edit (camera on a rail / attached to a player) | Game camera rig | `FlyControls` + `cameraControls: fly` + `restoreCameraOnDisable: true`, toggled from `editor.on('enabled')` |
+| Weapon/cockpit mesh flies with the free camera | It's a child of the camera | Hide camera children in the `enabled` handler |
+| Edited curve doesn't match what the game follows | Different Catmull-Rom parametrization | Set `curve.parametrization` (e.g. `'centripetal'` for `CatmullRomCurve3(..., 'centripetal')`) |
+| Game crashes after a point was deleted in the editor | Code looks points up by metadata | Protect them with `canEdit` (`deleteWaypoint`) |
+| Ground routes float / sink after editing | No constraint | `constrainWaypoint: surfaceConstraint(() => [terrain])`, then `editor.applyConstraints()` after import |
+| Save does nothing / 404 | Dev server started before the plugin was added, or endpoint mismatch | Restart the dev server; `saveToDevServer(json, { endpoint })` must match `pathEditorSavePlugin({ endpoint })` |
+| `Cannot find module 'three-path-editor/editor'` (TS) | `moduleResolution: "node"` with an old package version | Update the package (ships `typesVersions`) or use `"bundler"` |
 | Clicking always rotates the camera / camera moves while dragging gizmo | Camera controls not passed | `new PathEditor({ ..., cameraControls: controls })` |
 | Clicks select but the game also reacts (shoots etc.) | Game listens to the same pointer events | Disable game input while the editor is enabled (`editor.on('enabled', ...)`) |
 | Game raycasts hit editor markers | Game raycasts `scene.children` recursively | Skip objects with `userData.pathEditor === true`, or disable the editor |
