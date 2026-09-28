@@ -142,6 +142,20 @@ export class Path {
     this.markChanged();
   }
 
+  /** Replaces the path's metadata (deep-copied). Undoable in the editor. */
+  setMetadata(metadata: Metadata): void {
+    this.metadata = structuredCloneSafe(metadata);
+    this.markChanged();
+  }
+
+  /** Replaces a waypoint's metadata (deep-copied). Undoable in the editor. */
+  setWaypointMetadata(index: number, metadata: Metadata): void {
+    const wp = this.waypoints[index];
+    if (!wp) return;
+    wp.metadata = structuredCloneSafe(metadata);
+    this.markChanged();
+  }
+
   /** Moves the waypoint at `from` so it ends up at index `to`. */
   reorderWaypoint(from: number, to: number): void {
     const n = this.waypoints.length;

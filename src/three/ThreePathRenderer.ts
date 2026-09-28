@@ -21,6 +21,7 @@ import {
 } from 'three';
 import { defaultCoordinateSystem, type CoordinateSystem } from '../core/coordinates';
 import type { Path } from '../core/Path';
+import type { Waypoint } from '../core/Waypoint';
 import type { HandleKind } from '../editor/EditorState';
 import { Orienter } from '../runtime/orientation';
 import { add, type Vec3 } from '../utils/vec3';
@@ -88,6 +89,25 @@ export interface ThreePathRendererOptions {
   arrowSpacing?: number | 'auto';
   /** Line samples per curve segment. Default 32. */
   samplesPerSegment?: number;
+  /**
+   * Text of each waypoint label (when labels are shown). Return `null` or an
+   * empty string for no label. Default: `defaultWaypointLabel`.
+   */
+  labelFormatter?: (context: WaypointLabelContext) => string | null;
+}
+
+export interface WaypointLabelContext {
+  path: Path;
+  waypoint: Waypoint;
+  index: number;
+}
+
+/** Path id on the first point, then the index, plus speed ×/roll ° when set. */
+export function defaultWaypointLabel({ path, waypoint, index }: WaypointLabelContext): string {
+  let text = index === 0 ? `${path.name ?? path.id} · 0` : String(index);
+  if (waypoint.speed !== undefined) text += ` ×${+waypoint.speed.toFixed(2)}`;
+  if (waypoint.roll) text += ` ↻${+waypoint.roll.toFixed(1)}°`;
+  return text;
 }
 
 /** userData stored on pickable editor objects. */
@@ -153,6 +173,7 @@ export class ThreePathRenderer {
       showDebug: options.showDebug ?? false,
       arrowSpacing: options.arrowSpacing ?? 'auto',
       samplesPerSegment: options.samplesPerSegment ?? 32,
+      labelFormatter: options.labelFormatter ?? defaultWaypointLabel,
     };
     const s = this.style;
     const mesh = (color: ColorRepresentation) =>
@@ -363,9 +384,8 @@ export class ThreePathRenderer {
     if (!this.options.showLabels || typeof document === 'undefined') return;
     const { path, style } = this;
     path.waypoints.forEach((wp, i) => {
-      let text = i === 0 ? `${path.name ?? path.id} · 0` : String(i);
-      if (wp.speed !== undefined) text += ` ×${+wp.speed.toFixed(2)}`;
-      if (wp.roll) text += ` ↻${+wp.roll.toFixed(1)}°`;
+      const text = this.options.labelFormatter({ path, waypoint: wp, index: i });
+      if (!text) return;
       const sprite = this.createLabel(text);
       sprite.position.fromArray(toWorld(wp.position));
       sprite.center.set(-0.15, -0.3); // offset to the upper-right of the marker

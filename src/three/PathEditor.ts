@@ -83,6 +83,30 @@ export interface PathEditorOptions {
    * somewhere else. Default false.
    */
   restoreCameraOnDisable?: boolean;
+  /**
+   * Decides which edits the editor (UI, shortcuts and its own methods) may
+   * make, e.g. to protect waypoints your code looks up by name, or to keep a
+   * path's curve type fixed. Return false to refuse; the editor then emits
+   * `denied`. Direct `Path` method calls are not checked. Default: allow all.
+   */
+  canEdit?: (action: EditorAction, context: EditActionContext) => boolean;
+}
+
+export type EditorAction =
+  | 'addWaypoint'
+  | 'deleteWaypoint'
+  | 'moveWaypoint'
+  | 'reorderWaypoint'
+  | 'editWaypointProperties'
+  | 'deletePath'
+  | 'renamePath'
+  | 'editCurve'
+  | 'editMetadata';
+
+export interface EditActionContext {
+  path: Path;
+  /** The waypoint the action targets, or null for path-level actions. */
+  waypointIndex: number | null;
 }
 
 export interface PathEditorEvents {
@@ -104,6 +128,8 @@ export interface PathEditorEvents {
    * (an overlay covering the canvas), so the editor could not handle it.
    */
   inputblocked: { target: Element; event: PointerEvent };
+  /** `canEdit` refused an edit. */
+  denied: { action: EditorAction } & EditActionContext;
 }
 
 export interface PickResult {
@@ -186,6 +212,7 @@ export class PathEditor {
   private readonly diagnostics: boolean;
   private blockedInputWarned = false;
   private readonly restoreCameraOnDisable: boolean;
+  private readonly canEditOption: PathEditorOptions['canEdit'];
   private savedCameraPose: { position: Vector3; quaternion: Quaternion; camera: Camera } | null = null;
   private transformControls: TransformControlsLike | null = null;
   private _enabled = false;
@@ -214,6 +241,7 @@ export class PathEditor {
     this.mirrorBezierHandles = options.mirrorBezierHandles ?? true;
     this.diagnostics = options.diagnostics ?? true;
     this.restoreCameraOnDisable = options.restoreCameraOnDisable ?? false;
+    this.canEditOption = options.canEdit;
     this.renderOptions = options.render ?? {};
     this.state = new EditorState(options.view);
     this.history = new EditorHistory(this.state, { limit: options.historyLimit });
@@ -276,6 +304,18 @@ export class PathEditor {
 
   getRenderer(path: Path): ThreePathRenderer | undefined {
     return this.renderers.get(path);
+  }
+
+  /** Whether `canEdit` allows `action` (true when no `canEdit` was given). */
+  can(action: EditorAction, path: Path, waypointIndex: number | null = null): boolean {
+    return this.canEditOption?.(action, { path, waypointIndex }) ?? true;
+  }
+
+  /** `can()` that also emits `denied` when refused. */
+  private allow(action: EditorAction, path: Path, waypointIndex: number | null = null): boolean {
+    if (this.can(action, path, waypointIndex)) return true;
+    this.events.emit('denied', { action, path, waypointIndex });
+    return false;
   }
 
   // --------------------------------------------------------------- lifecycle
@@ -415,6 +455,8 @@ export class PathEditor {
   }
 
   removePath(id: string): Path | undefined {
+    const path = this.getPath(id);
+    if (!path || !this.allow('deletePath', path)) return undefined;
     return this.state.removePath(id);
   }
 
@@ -425,6 +467,8 @@ export class PathEditor {
   }
 
   renamePath(oldId: string, newId: string): boolean {
+    const path = this.getPath(oldId);
+    if (!path || !this.allow('renamePath', path)) return false;
     return this.state.renamePath(oldId, newId);
   }
 
@@ -489,7 +533,7 @@ export class PathEditor {
    */
   addWaypoint(options: { pathId?: string; index?: number; position?: ArrayLike<number>; select?: boolean } = {}): number | null {
     const path = options.pathId ? this.getPath(options.pathId) : this.selectedPath;
-    if (!path) return null;
+    if (!path || !this.allow('addWaypoint', path)) return null;
     let index: number;
     if (options.index !== undefined) {
       index = Math.min(Math.max(options.index, 0), path.waypoints.length);
@@ -505,7 +549,7 @@ export class PathEditor {
   /** Adds a waypoint where the pointer ray hits the placement surface. */
   addWaypointAtScreen(clientX: number, clientY: number): number | null {
     const path = this.selectedPath;
-    if (!path) return null;
+    if (!path || !this.allow('addWaypoint', path)) return null;
     this.setRayFromScreen(clientX, clientY);
     const refIndex = this.selection.waypointIndex ?? path.waypoints.length - 1;
     const renderer = this.renderers.get(path);
@@ -527,7 +571,7 @@ export class PathEditor {
    */
   insertWaypointAt(pathId: string, t: number, options: { select?: boolean } = {}): number | null {
     const path = this.getPath(pathId);
-    if (!path) return null;
+    if (!path || !this.allow('addWaypoint', path)) return null;
     const index = insertWaypointAtT(path, t);
     if (options.select ?? true) this.state.select(path.id, index);
     return index;
@@ -548,19 +592,22 @@ export class PathEditor {
 
   removeWaypoint(pathId: string, index: number): void {
     const path = this.getPath(pathId);
-    if (!path?.removeWaypoint(index)) return;
+    if (!path || !path.waypoints[index] || !this.allow('deleteWaypoint', path, index)) return;
+    path.removeWaypoint(index);
     const n = path.waypoints.length;
     this.state.select(path.id, n === 0 ? null : Math.min(index, n - 1));
   }
 
   /** Moves a waypoint to a new position (path space). */
   moveWaypoint(pathId: string, index: number, position: ArrayLike<number>): void {
-    this.getPath(pathId)?.moveWaypoint(index, position);
+    const path = this.getPath(pathId);
+    if (!path || !path.waypoints[index] || !this.allow('moveWaypoint', path, index)) return;
+    path.moveWaypoint(index, position);
   }
 
   reorderWaypoint(pathId: string, from: number, to: number): void {
     const path = this.getPath(pathId);
-    if (!path) return;
+    if (!path || !this.allow('reorderWaypoint', path, from)) return;
     path.reorderWaypoint(from, to);
     if (this.selection.pathId === pathId && this.selection.waypointIndex === from) {
       this.state.select(pathId, Math.min(Math.max(to, 0), path.waypoints.length - 1));
@@ -571,7 +618,7 @@ export class PathEditor {
   shiftSelectedWaypoint(delta: -1 | 1): void {
     const path = this.selectedPath;
     const index = this.selection.waypointIndex;
-    if (!path || index === null) return;
+    if (!path || index === null || !this.allow('reorderWaypoint', path, index)) return;
     this.state.select(path.id, shiftWaypoint(path, index, delta));
   }
 
@@ -920,7 +967,7 @@ export class PathEditor {
     const tc = this.transformControls;
     if (!tc) return;
     const path = this.selectedPath;
-    if (!this._enabled || !this.state.view.gizmos || !path || waypointIndex === null) {
+    if (!this._enabled || !this.state.view.gizmos || !path || waypointIndex === null || !this.can('moveWaypoint', path, waypointIndex)) {
       tc.detach();
       return;
     }

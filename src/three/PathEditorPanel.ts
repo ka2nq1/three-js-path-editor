@@ -1,7 +1,8 @@
 import type { LoopMode } from '../core/PathCursor';
-import type { CurveType } from '../core/types';
+import type { CurveType, Metadata } from '../core/types';
 import type { EditorViewOptions } from '../editor/EditorState';
-import { EDITOR_UI_ATTRIBUTE, type PathEditor } from './PathEditor';
+import { EDITOR_UI_ATTRIBUTE, type EditorAction, type PathEditor } from './PathEditor';
+import type { WaypointLabelContext } from './ThreePathRenderer';
 
 export interface PathEditorPanelOptions {
   /** Where to mount the panel. Default `document.body`. */
@@ -22,6 +23,8 @@ export interface PathEditorPanelOptions {
   collapsed?: boolean;
   /** Ask before deleting a path. Default true. */
   confirmDelete?: boolean;
+  /** Extra text after `#i x, y, z` in the waypoint list (e.g. a name from metadata). */
+  formatWaypoint?: (context: WaypointLabelContext) => string | null;
 }
 
 const VIEW_LABELS: [keyof EditorViewOptions, string][] = [
@@ -51,6 +54,8 @@ const CSS = `
 .tpe-points div:hover{background:#252d3a}.tpe-points div.sel{background:#5a2330}
 .tpe-panel button.tpe-danger{border-color:#7a2a36;color:#ff9aa8}.tpe-panel button.tpe-danger:hover{background:#4a1c24}
 .tpe-panel input[data-el=speed-wp],.tpe-panel input[data-el=roll]{width:54px}
+.tpe-panel textarea{font:11px/1.35 ui-monospace,monospace;color:inherit;background:#252d3a;border:1px solid #364052;border-radius:4px;padding:3px 5px;width:100%;box-sizing:border-box;min-height:44px;resize:vertical}
+.tpe-panel textarea.tpe-invalid{border-color:#b04454}
 .tpe-hint{color:#8b95a7;font-size:11px}.tpe-status{color:#9fd49f;min-height:14px}
 `;
 
@@ -124,9 +129,13 @@ export class PathEditorPanel {
       editor.paths.map((p) => `<option value="${esc(p.id)}">${esc(p.id)} (${p.dimension}D)</option>`).join('');
     pathSelect.value = path?.id ?? '';
 
-    for (const name of ['pathId', 'curve', 'closed', 'tension', 'delpath', 'reverse', 'add', 'preview']) {
-      (this.$(name) as HTMLInputElement).disabled = !path;
-    }
+    const denied = (action: EditorAction, waypointIndex: number | null = null) =>
+      !path || !editor.can(action, path, waypointIndex);
+    (this.$('preview') as HTMLButtonElement).disabled = !path;
+    (this.$('pathId') as HTMLInputElement).disabled = denied('renamePath');
+    (this.$('delpath') as HTMLButtonElement).disabled = denied('deletePath');
+    (this.$('add') as HTMLButtonElement).disabled = denied('addWaypoint');
+    for (const name of ['curve', 'closed', 'tension', 'reverse']) (this.$(name) as HTMLInputElement).disabled = denied('editCurve');
     setValue(this.$<HTMLInputElement>('pathId'), path?.id ?? '');
     this.$<HTMLSelectElement>('curve').value = path?.curve.type ?? 'catmull-rom';
     this.$<HTMLInputElement>('closed').checked = path?.curve.closed ?? false;
@@ -141,7 +150,7 @@ export class PathEditorPanel {
               `<div data-idx="${i}" class="${i === index ? 'sel' : ''}">#${i}  ${w.position
                 .slice(0, path.dimension)
                 .map((v) => v.toFixed(2))
-                .join(', ')}</div>`,
+                .join(', ')}${this.waypointSuffix(path, i)}</div>`,
           )
           .join('')
       : '';
@@ -149,15 +158,25 @@ export class PathEditorPanel {
     const wp = path && index !== null ? path.waypoints[index] : null;
     (['x', 'y', 'z'] as const).forEach((axis, c) => {
       const input = this.$<HTMLInputElement>(axis);
-      input.disabled = !wp || (c === 2 && path?.dimension === 2);
+      input.disabled = !wp || (c === 2 && path?.dimension === 2) || denied('moveWaypoint', index);
       setValue(input, wp && !(c === 2 && path?.dimension === 2) ? String(round(wp.position[c])) : '');
     });
-    for (const name of ['del', 'up', 'down']) (this.$(name) as HTMLButtonElement).disabled = !wp;
+    (this.$('del') as HTMLButtonElement).disabled = !wp || denied('deleteWaypoint', index);
+    for (const name of ['up', 'down']) (this.$(name) as HTMLButtonElement).disabled = !wp || denied('reorderWaypoint', index);
     const speedInput = this.$<HTMLInputElement>('speed-wp');
     const rollInput = this.$<HTMLInputElement>('roll');
-    speedInput.disabled = rollInput.disabled = !wp;
+    speedInput.disabled = rollInput.disabled = !wp || denied('editWaypointProperties', index);
     setValue(speedInput, wp?.speed !== undefined ? String(round(wp.speed)) : '');
     setValue(rollInput, wp?.roll !== undefined ? String(round(wp.roll)) : '');
+
+    const pointMeta = this.$<HTMLTextAreaElement>('meta-wp');
+    pointMeta.disabled = !wp || denied('editMetadata', index);
+    setValue(pointMeta, wp ? stringifyMetadata(wp.metadata) : '');
+    const pathMeta = this.$<HTMLTextAreaElement>('meta-path');
+    pathMeta.disabled = denied('editMetadata');
+    setValue(pathMeta, path ? stringifyMetadata(path.metadata) : '');
+    if (document.activeElement !== pointMeta) pointMeta.classList.remove('tpe-invalid');
+    if (document.activeElement !== pathMeta) pathMeta.classList.remove('tpe-invalid');
 
     // View
     for (const [key] of VIEW_LABELS) this.$<HTMLInputElement>(`view-${key}`).checked = editor.view[key];
@@ -170,6 +189,11 @@ export class PathEditorPanel {
     this.$<HTMLButtonElement>('play').textContent = preview?.isPlaying ? 'Pause' : 'Play';
     setValue(this.$<HTMLInputElement>('speed'), preview ? String(round(preview.speed)) : '');
     this.$<HTMLSelectElement>('loop').value = preview?.loop ?? 'loop';
+  }
+
+  private waypointSuffix(path: NonNullable<PathEditor['selectedPath']>, index: number): string {
+    const text = this.options.formatWaypoint?.({ path, waypoint: path.waypoints[index], index });
+    return text ? `  ${esc(text)}` : '';
   }
 
   private status(text: string): void {
@@ -211,7 +235,7 @@ export class PathEditorPanel {
         this.status(`Deleted path "${path.id}".`);
         break;
       case 'reverse':
-        path?.reverse();
+        if (path && editor.can('editCurve', path)) path.reverse();
         break;
       case 'add':
         editor.addWaypoint();
@@ -278,14 +302,18 @@ export class PathEditorPanel {
         this.status('Id is empty or already used.');
         target.value = path.id;
       }
-    } else if (name === 'curve' && path) path.setCurve({ type: target.value as CurveType });
-    else if (name === 'closed' && path) path.setCurve({ closed: target.checked });
-    else if (name === 'tension' && path && target.value !== '') path.setCurve({ tension: Number(target.value) });
+    } else if ((name === 'curve' || name === 'closed' || name === 'tension') && path) {
+      if (!editor.can('editCurve', path)) return;
+      if (name === 'curve') path.setCurve({ type: target.value as CurveType });
+      else if (name === 'closed') path.setCurve({ closed: target.checked });
+      else if (target.value !== '') path.setCurve({ tension: Number(target.value) });
+    }
     else if ((name === 'speed-wp' || name === 'roll') && path) {
       const index = editor.selection.waypointIndex;
       if (index === null) return;
       // Empty field = default (speed ×1, roll 0°).
       const value = target.value === '' ? null : Number(target.value);
+      if (!editor.can('editWaypointProperties', path, index)) return;
       if (name === 'speed-wp') path.setWaypointProperties(index, { speed: value === null ? null : Math.max(0, value) });
       else path.setWaypointProperties(index, { roll: value });
     } else if ((name === 'x' || name === 'y' || name === 'z') && path) {
@@ -293,7 +321,19 @@ export class PathEditorPanel {
       if (index === null || target.value === '') return;
       const pos = [...path.waypoints[index].position];
       pos['xyz'.indexOf(name)] = Number(target.value);
-      path.moveWaypoint(index, pos);
+      editor.moveWaypoint(path.id, index, pos);
+    } else if ((name === 'meta-wp' || name === 'meta-path') && path) {
+      const index = editor.selection.waypointIndex;
+      const waypointIndex = name === 'meta-wp' ? index : null;
+      if ((name === 'meta-wp' && index === null) || !editor.can('editMetadata', path, waypointIndex)) return;
+      const metadata = parseMetadata(target.value);
+      target.classList.toggle('tpe-invalid', metadata === null);
+      if (metadata === null) {
+        this.status('Metadata must be a JSON object, e.g. {"name": "start"}.');
+        return;
+      }
+      if (waypointIndex === null) path.setMetadata(metadata);
+      else path.setWaypointMetadata(waypointIndex, metadata);
     } else if (name.startsWith('view-')) editor.setView({ [name.slice(5)]: target.checked });
     else if (name === 'speed' && editor.preview && target.value !== '') editor.preview.speed = Math.max(0, Number(target.value));
     else if (name === 'loop' && editor.preview) editor.preview.loop = target.value as LoopMode;
@@ -346,10 +386,12 @@ export class PathEditorPanel {
       <label title="Speed multiplier at this point (empty = ×1). Blended between points.">Speed × <input type="number" step="0.1" min="0" placeholder="1" data-el="speed-wp"></label>
       <label title="Bank/roll angle in degrees (positive = bank right, empty = 0).">Roll ° <input type="number" step="5" placeholder="0" data-el="roll"></label>
     </div>
+    <div class="tpe-row"><label style="flex:1;display:block">Point metadata (JSON)<textarea data-el="meta-wp" spellcheck="false"></textarea></label></div>
     <div class="tpe-row">
       <button data-act="add" data-el="add">+ Add</button><button data-act="del" data-el="del">Delete</button>
       <button data-act="up" data-el="up" title="Move earlier">▲</button><button data-act="down" data-el="down" title="Move later">▼</button>
     </div>
+    <div class="tpe-row"><label style="flex:1;display:block">Path metadata (JSON)<textarea data-el="meta-path" spellcheck="false"></textarea></label></div>
   </section>
   <section><h4>View</h4><div class="tpe-row">${view}</div></section>
   <section>
@@ -380,8 +422,23 @@ function injectStyle(): void {
 }
 
 /** Updates an input unless the user is typing in it. */
-function setValue(input: HTMLInputElement, value: string): void {
+function setValue(input: HTMLInputElement | HTMLTextAreaElement, value: string): void {
   if (document.activeElement !== input) input.value = value;
+}
+
+function stringifyMetadata(metadata: Metadata): string {
+  return Object.keys(metadata).length ? JSON.stringify(metadata, null, 1) : '';
+}
+
+/** Empty text = `{}`; anything but a JSON object = null. */
+function parseMetadata(text: string): Metadata | null {
+  if (!text.trim()) return {};
+  try {
+    const value: unknown = JSON.parse(text);
+    return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Metadata) : null;
+  } catch {
+    return null;
+  }
 }
 
 function round(v: number): number {
