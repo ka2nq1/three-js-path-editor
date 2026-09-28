@@ -371,6 +371,7 @@ export class Path {
     }
     this.id = data.id;
     this.name = data.name;
+    for (const key of Object.keys(this.curve)) delete (this.curve as Partial<CurveOptions>)[key as keyof CurveOptions];
     Object.assign(this.curve, normalizeCurveOptions(data.curve));
     const points = (data.points ?? []).map((p: WaypointData) => this.toWaypoint(Waypoint.fromJSON(p)));
     this.waypoints.splice(0, this.waypoints.length, ...points);

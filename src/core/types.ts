@@ -9,6 +9,13 @@ export type PathDimension = 2 | 3;
 
 export type CurveType = 'linear' | 'catmull-rom' | 'bezier';
 
+/**
+ * Catmull-Rom knot spacing, same meaning as THREE.CatmullRomCurve3's curveType:
+ * 'uniform' ('catmullrom' in three, uses `tension`), 'centripetal' (avoids
+ * cusps and overshoot on uneven spacing), 'chordal'.
+ */
+export type CatmullRomParametrization = 'uniform' | 'centripetal' | 'chordal';
+
 export interface CurveOptions {
   type: CurveType;
   /** Connect the last waypoint back to the first. Default `false`. */
@@ -18,6 +25,12 @@ export interface CurveOptions {
    * Also used to auto-generate Bezier handles that are not set explicitly.
    */
   tension: number;
+  /**
+   * Catmull-Rom only. Default 'uniform'. Match the parametrization your runtime
+   * uses (e.g. THREE.CatmullRomCurve3 'centripetal') so the editor shows the
+   * exact curve the game follows. `tension` only applies to 'uniform'.
+   */
+  parametrization?: CatmullRomParametrization;
 }
 
 /** JSON representation of a waypoint. Unknown keys are preserved. */

@@ -1,5 +1,5 @@
 import type { LoopMode } from '../core/PathCursor';
-import type { CurveType, Metadata } from '../core/types';
+import type { CatmullRomParametrization, CurveType, Metadata } from '../core/types';
 import type { EditorViewOptions } from '../editor/EditorState';
 import { EDITOR_UI_ATTRIBUTE, type EditorAction, type PathEditor } from './PathEditor';
 import type { WaypointLabelContext } from './ThreePathRenderer';
@@ -136,6 +136,9 @@ export class PathEditorPanel {
     (this.$('delpath') as HTMLButtonElement).disabled = denied('deletePath');
     (this.$('add') as HTMLButtonElement).disabled = denied('addWaypoint');
     for (const name of ['curve', 'closed', 'tension', 'reverse']) (this.$(name) as HTMLInputElement).disabled = denied('editCurve');
+    const param = this.$<HTMLSelectElement>('param');
+    param.disabled = denied('editCurve') || path?.curve.type !== 'catmull-rom';
+    param.value = path?.curve.parametrization ?? 'uniform';
     setValue(this.$<HTMLInputElement>('pathId'), path?.id ?? '');
     this.$<HTMLSelectElement>('curve').value = path?.curve.type ?? 'catmull-rom';
     this.$<HTMLInputElement>('closed').checked = path?.curve.closed ?? false;
@@ -302,9 +305,10 @@ export class PathEditorPanel {
         this.status('Id is empty or already used.');
         target.value = path.id;
       }
-    } else if ((name === 'curve' || name === 'closed' || name === 'tension') && path) {
+    } else if ((name === 'curve' || name === 'closed' || name === 'tension' || name === 'param') && path) {
       if (!editor.can('editCurve', path)) return;
       if (name === 'curve') path.setCurve({ type: target.value as CurveType });
+      else if (name === 'param') path.setCurve({ parametrization: target.value as CatmullRomParametrization });
       else if (name === 'closed') path.setCurve({ closed: target.checked });
       else if (target.value !== '') path.setCurve({ tension: Number(target.value) });
     }
@@ -373,6 +377,7 @@ export class PathEditorPanel {
       <label><input type="checkbox" data-el="closed">Closed</label>
       <label title="Tension">T <input type="number" step="0.05" min="0" max="1" data-el="tension"></label>
     </div>
+    <div class="tpe-row"><label style="flex:1" title="Catmull-Rom knot spacing; match your runtime curve (e.g. THREE.CatmullRomCurve3 'centripetal')">Spacing <select data-el="param"><option value="uniform">Uniform</option><option value="centripetal">Centripetal</option><option value="chordal">Chordal</option></select></label></div>
   </section>
   <section>
     <h4>Waypoints <span data-el="count"></span></h4>

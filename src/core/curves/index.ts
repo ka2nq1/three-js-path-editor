@@ -32,6 +32,6 @@ export function createCurve(points: readonly CurveInputPoint[], options: CurveOp
       );
     case 'catmull-rom':
     default:
-      return new CatmullRomCurve(positions, options.closed, options.tension);
+      return new CatmullRomCurve(positions, options.closed, options.tension, options.parametrization);
   }
 }

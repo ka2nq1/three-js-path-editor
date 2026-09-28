@@ -98,6 +98,10 @@ function validatePathData(p: unknown, where: string): asserts p is PathData {
     if (type !== 'linear' && type !== 'catmull-rom' && type !== 'bezier') {
       throw new PathFormatError(`${where}.curve.type must be "linear", "catmull-rom" or "bezier".`);
     }
+    const parametrization = p.curve.parametrization;
+    if (parametrization !== undefined && parametrization !== 'uniform' && parametrization !== 'centripetal' && parametrization !== 'chordal') {
+      throw new PathFormatError(`${where}.curve.parametrization must be "uniform", "centripetal" or "chordal".`);
+    }
   }
   if (!Array.isArray(p.points)) throw new PathFormatError(`${where}.points must be an array.`);
   p.points.forEach((pt, j) => {
