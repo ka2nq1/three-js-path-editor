@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>three-path-editor demo</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0e1116; }
+      #app { position: relative; width: 100%; height: 100%; }
+      #info {
+        position: absolute; left: 10px; top: 10px; z-index: 10; max-width: 360px;
+        color: #cfd6e2; font: 12px/1.5 system-ui, sans-serif;
+        background: rgba(18, 22, 30, 0.85); padding: 8px 12px; border-radius: 8px;
+      }
+      #info b { color: #fff; }
+      #info button { font: inherit; margin: 4px 4px 0 0; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="info">
+        <b>three-path-editor demo</b> — test bed for the package, not part of it.<br />
+        Orbit: drag · Zoom: wheel · Select: click a point · Move: gizmo · Add: Shift+click ground<br />
+        The blue car follows <code>ground-loop</code> with a plain <code>PathFollower</code> (runtime API).<br />
+        <button id="save">Save to localStorage</button><button id="load">Load from localStorage</button>
+        <button id="reload">Reload demo JSON</button><button id="toggle">Toggle editor (E)</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

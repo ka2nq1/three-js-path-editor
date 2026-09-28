@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "paths": [
+    {
+      "id": "helicopter-route",
+      "name": "Helicopter route",
+      "dimension": 3,
+      "curve": {
+        "type": "catmull-rom",
+        "closed": true,
+        "tension": 0.5
+      },
+      "points": [
+        {
+          "position": [
+            -30,
+            12,
+            -20
+          ],
+          "speed": 1.4,
+          "roll": 15
+        },
+        {
+          "position": [
+            0,
+            20,
+            -35
+          ],
+          "metadata": {
+            "note": "climb"
+          },
+          "speed": 0.6,
+          "roll": 25
+        },
+        {
+          "position": [
+            30,
+            16,
+            -15
+          ],
+          "roll": 30
+        },
+        {
+          "position": [
+            25,
+            10,
+            25
+          ],
+          "speed": 1.5,
+          "roll": 20
+        },
+        {
+          "position": [
+            -20,
+            8,
+            25
+          ],
+          "roll": 30
+        }
+      ],
+      "metadata": {
+        "unit": "helicopter"
+      }
+    },
+    {
+      "id": "ground-loop",
+      "name": "Ground loop",
+      "dimension": 2,
+      "curve": {
+        "type": "bezier",
+        "closed": true,
+        "tension": 0.5
+      },
+      "points": [
+        {
+          "position": [
+            -15,
+            -8
+          ]
+        },
+        {
+          "position": [
+            15,
+            -8
+          ]
+        },
+        {
+          "position": [
+            18,
+            10
+          ]
+        },
+        {
+          "position": [
+            -18,
+            10
+          ]
+        }
+      ],
+      "metadata": {
+        "unit": "car"
+      }
+    }
+  ]
+}

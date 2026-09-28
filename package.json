@@ -1,0 +1,85 @@
+{
+  "name": "three-path-editor",
+  "version": "0.1.0",
+  "description": "Framework-agnostic in-game path editor and runtime path follower for existing Three.js projects (2D/3D, linear, Catmull-Rom, Bezier).",
+  "keywords": [
+    "three",
+    "threejs",
+    "path",
+    "spline",
+    "catmull-rom",
+    "bezier",
+    "editor",
+    "waypoints",
+    "path-follower"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ka2nq1/three-js-path-editor.git"
+  },
+  "homepage": "https://github.com/ka2nq1/three-js-path-editor#readme",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./editor": {
+      "types": "./dist/editor.d.ts",
+      "import": "./dist/editor.js"
+    },
+    "./skills/*": "./skills/*",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "path-editor": "./bin/path-editor.mjs"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "demo": "vite --config examples/demo/vite.config.ts",
+    "demo:build": "vite build --config examples/demo/vite.config.ts",
+    "doctor": "node bin/path-editor.mjs doctor",
+    "prepare": "npm run build"
+  },
+  "peerDependencies": {
+    "@types/three": "*",
+    "three": ">=0.150.0"
+  },
+  "peerDependenciesMeta": {
+    "@types/three": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "jsdom": "^26.1.0",
+    "three": "^0.186.1",
+    "tsup": "^8.5.1",
+    "typescript": "~5.9.3",
+    "vite": "^6.4.1",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
