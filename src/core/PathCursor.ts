@@ -45,8 +45,20 @@ export interface PathCursorEvents {
   waypoint: { index: number };
   /** Looped back to start ('loop') or turned around ('pingpong'). */
   loop: { count: number; direction: 1 | -1 };
-  /** Reached the end with loop mode 'none'. */
+  /** Reached the end with loop mode 'none'. Followed by `pause`. */
   complete: void;
+  /** `playing` went false -> true (`play()`). Not emitted for `autoPlay` at construction. */
+  play: void;
+  /**
+   * `playing` went true -> false: `pause()`, or the automatic stop at the end
+   * with loop mode 'none' (emitted right after `complete`, with `playing` already false).
+   */
+  pause: void;
+  /**
+   * `reset()` was called (also by `play()` restarting a completed cursor, before `play`).
+   * Seeking with `progress`/`distance`/`setPath` does not emit it.
+   */
+  reset: void;
 }
 
 /**
@@ -111,21 +123,28 @@ export class PathCursor {
     return this._complete;
   }
 
+  /** Starts moving. A completed cursor restarts from the beginning. Emits `play` if it was stopped. */
   play(): void {
     if (this._complete) this.reset();
+    if (this._playing) return;
     this._playing = true;
+    this.events.emit('play', undefined);
   }
 
+  /** Stops moving. Emits `pause` if it was playing. */
   pause(): void {
+    if (!this._playing) return;
     this._playing = false;
+    this.events.emit('pause', undefined);
   }
 
-  /** Back to the start position and direction. Keeps play state. */
+  /** Back to the start position and direction. Keeps play state. Emits `reset`. */
   reset(): void {
     this.direction = this.startDirection;
     this.loopCount = 0;
     this._complete = false;
     this._distance = clamp(this.startProgress, 0, 1) * this.path.length;
+    this.events.emit('reset', undefined);
   }
 
   /** Switches path while keeping normalized progress. */
@@ -191,6 +210,8 @@ export class PathCursor {
         this._playing = false;
         this.emitProgress();
         this.events.emit('complete', undefined);
+        // Skipped if a complete listener already restarted playback.
+        if (!this._playing) this.events.emit('pause', undefined);
         return true;
       }
       this.loopCount++;

@@ -89,7 +89,7 @@ export class PathEditorPanel {
     el.addEventListener('click', this.onClick);
     el.addEventListener('change', this.onChange);
 
-    for (const type of ['change', 'select', 'view', 'pathadded', 'pathremoved', 'preview', 'enabled', 'history'] as const) {
+    for (const type of ['change', 'select', 'view', 'pathadded', 'pathremoved', 'preview', 'previewstate', 'enabled', 'history'] as const) {
       this.unsubscribers.push(editor.on(type, () => this.scheduleRefresh()));
     }
     this.refresh();

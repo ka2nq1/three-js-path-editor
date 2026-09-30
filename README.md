@@ -316,7 +316,8 @@ editor.placement = objectPlacement(() => [terrain], { surfaceOffset: 1 });
 
 **Undo/redo.** Every edit is undoable: moves, adds, inserts, deletes (including whole paths), reorders, curve settings, speed/roll, renames. A gizmo drag counts as one step, and so does any compound operation. Undo restores the same `Path` objects, so followers that reference a deleted-then-restored path keep working. The selection is restored too. Shortcuts use the physical key, so they work with any keyboard layout. Inside panel text fields the browser's own undo applies. `editor.import()` starts a fresh history (pass `{ clearHistory: false }` to keep it). You can also call `editor.history.begin()` / `end()` to group your own scripted edits, and `editor.history.clear()` to reset. The default limit is 100 steps (`historyLimit` option).
 
-Editor events: `change`, `select`, `view`, `pathadded`, `pathremoved`, `import`, `dragstart`, `dragend`, `enabled`, `preview`, `history`, `inputblocked`, `denied`:
+Editor events: `change`, `select`, `view`, `pathadded`, `pathremoved`, `import`, `dragstart`, `dragend`, `enabled`, `preview`, `previewstate`, `history`, `inputblocked`, `denied`
+- `PathPreview`: `play`, `pause`, `toggle`, `reset`, `setProgress`, `setPath`, `on`, `detach`, `isPlaying`, `speed`, `loop`, `progress`, `object`, `follower`:
 
 ```ts
 editor.on('dragend', ({ path }) => autosave(editor.exportString()));
@@ -380,6 +381,9 @@ const follower = new PathFollower({
   onWaypoint: ({ index }) => {},
   onLoop: ({ count, direction }) => {},
   onComplete: () => {},
+  onPlay: () => {},       // playback started
+  onPause: () => {},      // playback stopped (pause(), or the end with loop 'none')
+  onReset: () => {},
 });
 
 // in your loop
@@ -396,6 +400,10 @@ follower.speedModifier = ({ progress }) => (progress > 0.9 ? 0.4 : 1); // slow d
 - `space: 'world'` (default) treats path coordinates as world coordinates and compensates for the object's parent transform. `space: 'parent'` writes positions directly.
 - `orientation: false` only moves the object. `positionOffset: [0, 2, 0]` adds a constant offset.
 - The follower has no loop of its own. It does nothing until you call `update(dt)`.
+- Events (`follower.on(type, fn)` returns an unsubscribe function; same on `PathCursor.events`):
+  - `progress`, `waypoint`, `loop` and `complete` come from `update()`.
+  - `play` and `pause` fire only when `isPlaying` actually changes, so a second `play()` emits nothing. Reaching the end with loop `'none'` emits `complete` and then `pause`, and `isPlaying` is already `false` inside both. `autoPlay` at construction doesn't emit `play`.
+  - `reset` fires on every `reset()`, which keeps the play state. `play()` on a completed follower restarts it: `reset`, then `play`. Seeks (`setProgress`, `setDistance`, `setPath`) emit nothing.
 
 ### Speed and bank per waypoint
 
@@ -444,6 +452,28 @@ editor.attachPreview();             // no object: an editor-owned arrow marker
 ```
 
 Preview speed defaults to "traverse the path in about 10 s", so it works at any world scale.
+
+### Keeping the previewed object in sync
+
+Every change to the preview's playback emits an event, whatever caused it: the panel's Play/Pause/Reset/Stop buttons, your own calls, or a `loop: 'none'` path reaching its end. Use events for things like animation state instead of polling `preview.isPlaying` every frame:
+
+```ts
+// Editor level: any preview, including ones started from the panel.
+editor.on('previewstate', ({ preview, playing }) => {
+  if (preview.object === enemy.root) enemy.setAnimation(playing ? 'walk' : 'idle');
+});
+
+// Or per preview: the same events as PathFollower.on.
+const preview = editor.attachPreview(enemy.root, 'patrol', {
+  onPlay: () => enemy.setAnimation('walk'),
+  onPause: () => enemy.setAnimation('idle'),
+});
+preview.on('reset', () => enemy.snapToStart());
+```
+
+- `previewstate` fires right after `preview` when an attached preview starts playing. A new preview autoplays, so the host doesn't need a separate "initial state" check.
+- `detachPreview()` on a playing preview fires `previewstate` with `playing: false` (and the preview's own `pause`) before `preview` with `null`. A detached preview's listeners are removed.
+- Listeners added with `preview.on()` survive `setPath` / `editor.previewPath()`.
 
 ## 2D paths
 
@@ -542,7 +572,7 @@ Full list: [skills/troubleshooting.md](skills/troubleshooting.md).
   - sample: `getPointAt(u)`, `getTangentAt(u)`, `getPointAtDistance(d)`, `getTangentAtDistance(d)`, `getPoint(t)`, `sample(n)`, `getSpacedPoints(n)`, `getWaypointDistances()`, `getBezierHandles(i)`, `getWaypointValueAtDistance(key, d)`, `getClosestPoint(p)`
   - `toJSON()`, `Path.fromJSON()`, `clone()`
 - `Waypoint`: `position`, `handleIn`, `handleOut`, `speed?`, `roll?`, `metadata`, `id?`
-- `PathCursor`: engine-agnostic progress, speed, loop and events
+- `PathCursor`: engine-agnostic progress, speed, loop and events (`progress`, `waypoint`, `loop`, `complete`, `play`, `pause`, `reset`)
 - `parsePathFile`, `readPathFile`, `getPathFromFile`, `serializePaths`, `stringifyPaths`, `PathFormatError`, `PATH_FORMAT_VERSION`
 - `createCoordinateSystem`, `defaultCoordinateSystem`, `CoordinateSystem`
 - Curves: `LinearCurve`, `CatmullRomCurve`, `BezierCurve`, `createCurve`, `ArcLengthTable`

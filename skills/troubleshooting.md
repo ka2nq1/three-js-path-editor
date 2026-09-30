@@ -51,6 +51,7 @@ Run `npx path-editor doctor` first. It finds the scene, camera, renderer, loop, 
 | 2D path lies on the wrong plane | Different coordinate systems in editor and follower | Pass the same `coordinates` to both |
 | Speed depends on waypoint spacing | You used `getPoint(t)` | Use `getPointAt(u)` / `PathFollower` (arc-length based) |
 | Game code overwrites the position | Game also moves the object | Pause that code, or read `path.getPointAt()` and feed the game's movement |
+| Character keeps its walk animation after the preview stops | Host polls `isPlaying`, or only listens to `preview` | `editor.on('previewstate', ({ preview, playing }) => ...)`: fires for panel, API, end of path and detach |
 | Object stays where the preview left it | Preview detached with `restoreOnDetach: false` | Default restores the transform. Use `editor.detachPreview()` |
 
 ## JSON

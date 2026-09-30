@@ -26,6 +26,12 @@ export interface PathFollowerOptions extends PathCursorOptions {
   onWaypoint?: Listener<PathCursorEvents['waypoint']>;
   onLoop?: Listener<PathCursorEvents['loop']>;
   onComplete?: Listener<void>;
+  /** Playback started (`play()`). See `PathCursorEvents.play`. */
+  onPlay?: Listener<void>;
+  /** Playback stopped (`pause()` or the end with loop 'none'). See `PathCursorEvents.pause`. */
+  onPause?: Listener<void>;
+  /** `reset()` was called. See `PathCursorEvents.reset`. */
+  onReset?: Listener<void>;
 }
 
 const _pos = new Vector3();
@@ -62,6 +68,9 @@ export class PathFollower {
     if (options.onWaypoint) this.on('waypoint', options.onWaypoint);
     if (options.onLoop) this.on('loop', options.onLoop);
     if (options.onComplete) this.on('complete', options.onComplete);
+    if (options.onPlay) this.on('play', options.onPlay);
+    if (options.onPause) this.on('pause', options.onPause);
+    if (options.onReset) this.on('reset', options.onReset);
   }
 
   // Cursor passthroughs -------------------------------------------------------
@@ -108,6 +117,7 @@ export class PathFollower {
     this.cursor.speedModifier = fn;
   }
 
+  /** Subscribes to cursor events (progress, waypoint, loop, complete, play, pause, reset). Returns an unsubscribe function. */
   on<K extends keyof PathCursorEvents>(type: K, listener: Listener<PathCursorEvents[K]>): () => void {
     return this.cursor.events.on(type, listener);
   }

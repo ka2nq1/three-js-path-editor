@@ -1,8 +1,13 @@
 import { Quaternion, Vector3, type Object3D } from 'three';
 import type { Path } from '../core/Path';
-import type { LoopMode } from '../core/PathCursor';
+import type { LoopMode, PathCursorEvents } from '../core/PathCursor';
+import type { Listener } from '../utils/Emitter';
 import { PathFollower, type PathFollowerOptions } from '../runtime/PathFollower';
 
+/**
+ * Follower options (speed, loop, orientation, `onPlay`/`onPause`/`onReset`/`onComplete`...)
+ * minus `object` and `path`. Default loop is 'loop'.
+ */
 export interface PathPreviewOptions extends Partial<Omit<PathFollowerOptions, 'object' | 'path'>> {
   /** Restore the object's original position/rotation on detach. Default true. */
   restoreOnDetach?: boolean;
@@ -12,6 +17,10 @@ export interface PathPreviewOptions extends Partial<Omit<PathFollowerOptions, 'o
  * Editor-side preview: plays any Object3D along a path with play/pause/reset.
  * Wraps a PathFollower and remembers the object's original transform so the
  * game object is left untouched after the preview ends.
+ *
+ * Every playback change emits an event, whoever caused it (panel, API, the end
+ * of a non-looping path, `detach`): subscribe with `on('play' | 'pause' | 'reset', ...)`
+ * instead of polling `isPlaying`.
  */
 export class PathPreview {
   readonly object: Object3D;
@@ -59,6 +68,14 @@ export class PathPreview {
     return this.follower.progress;
   }
 
+  /**
+   * Subscribes to the follower's events (progress, waypoint, loop, complete,
+   * play, pause, reset). Listeners survive `setPath`; `detach` removes them.
+   */
+  on<K extends keyof PathCursorEvents>(type: K, listener: Listener<PathCursorEvents[K]>): () => void {
+    return this.follower.on(type, listener);
+  }
+
   play(): this {
     this.follower.play();
     return this;
@@ -86,10 +103,14 @@ export class PathPreview {
     if (!this.detached) this.follower.update(dt);
   }
 
-  /** Stops the preview and (by default) restores the object's original transform. */
+  /**
+   * Stops the preview (emitting `pause` if it was playing), removes its
+   * listeners and (by default) restores the object's original transform.
+   */
   detach(): void {
     if (this.detached) return;
     this.detached = true;
+    this.follower.pause();
     this.follower.dispose();
     if (this.restoreOnDetach) {
       this.object.position.copy(this.savedPosition);

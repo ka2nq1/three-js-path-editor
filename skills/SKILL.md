@@ -138,6 +138,16 @@ editor.attachPreview(helicopterObject, 'helicopter-route', {
 });
 ```
 
+Keep the object's own state (animation clip, sounds, effects) in sync through events. **Never poll `editor.preview?.isPlaying` every frame.** The events fire for panel buttons, API calls, the end of a `loop: 'none'` path and detach:
+```ts
+editor.on('previewstate', ({ preview, playing }) => {
+  if (preview.object === enemy.root) enemy.playClipFor(playing); // walk while playing, idle otherwise
+});
+```
+- `previewstate` fires once per real change: after `preview` when an attached preview starts playing (the default), and with `playing: false` when a playing preview is detached.
+- Per preview: `preview.on('play' | 'pause' | 'reset' | 'complete' | ..., fn)`, or the options `onPlay`, `onPause`, `onReset`. Listeners survive `setPath`/`previewPath`.
+- `PathFollower` has the same `play`/`pause`/`reset` events and `onPlay`/`onPause`/`onReset` options. With loop `'none'`, the end emits `complete`, then `pause`.
+
 Runtime (production):
 ```ts
 import { PathFollower, getPathFromFile } from 'three-path-editor';

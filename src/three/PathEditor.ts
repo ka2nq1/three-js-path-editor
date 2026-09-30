@@ -126,7 +126,14 @@ export interface PathEditorEvents {
   dragstart: { path: Path; waypointIndex: number };
   dragend: { path: Path; waypointIndex: number };
   enabled: boolean;
+  /** A preview was attached (or retargeted by `previewPath`), or detached (`null`). */
   preview: PathPreview | null;
+  /**
+   * The current preview started or stopped playing: panel buttons, API calls,
+   * the end of a non-looping path. Also fires after `preview` when an attached
+   * preview starts playing, and with `playing: false` when a playing preview is detached.
+   */
+  previewstate: { preview: PathPreview; playing: boolean };
   /** Undo/redo availability changed. */
   history: { canUndo: boolean; canRedo: boolean };
   /**
@@ -689,9 +696,13 @@ export class PathEditor {
       subject = this.ownedPreviewObject = this.createPreviewMarker(target);
       this.root.add(subject);
     }
-    this._preview = new PathPreview(subject, target, { coordinates: this.coordinates, ...options });
-    this.events.emit('preview', this._preview);
-    return this._preview;
+    const preview = (this._preview = new PathPreview(subject, target, { coordinates: this.coordinates, ...options }));
+    // Removed by preview.detach(), after it emits its final pause.
+    preview.on('play', () => this.events.emit('previewstate', { preview, playing: true }));
+    preview.on('pause', () => this.events.emit('previewstate', { preview, playing: false }));
+    this.events.emit('preview', preview);
+    if (preview.isPlaying) this.events.emit('previewstate', { preview, playing: true });
+    return preview;
   }
 
   /** Previews `path`: retargets the current preview (keeping its object) or starts one with the marker. */
