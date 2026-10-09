@@ -1,6 +1,6 @@
 {
   "name": "three-path-editor",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Framework-agnostic in-game path editor and runtime path follower for existing Three.js projects (2D/3D, linear, Catmull-Rom, Bezier).",
   "keywords": [
     "three",

@@ -23,6 +23,12 @@ export interface PathEditorPanelOptions {
   collapsed?: boolean;
   /** Ask before deleting a path. Default true. */
   confirmDelete?: boolean;
+  /**
+   * Hide the panel while the editor is disabled. Default false, because the
+   * panel's own Editor button is then the only way back in; set it when the
+   * host toggles the editor with a key.
+   */
+  hideWhenDisabled?: boolean;
   /** Extra text after `#i x, y, z` in the waypoint list (e.g. a name from metadata). */
   formatWaypoint?: (context: WaypointLabelContext) => string | null;
 }
@@ -32,6 +38,9 @@ const VIEW_LABELS: [keyof EditorViewOptions, string][] = [
   ['paths', 'Paths'],
   ['directions', 'Arrows'],
   ['labels', 'Labels'],
+  ['facings', 'Facings'],
+  ['sightlines', 'Sight lines'],
+  ['surface', 'Below floor'],
   ['grid', 'Grid'],
   ['debug', 'Debug'],
 ];
@@ -53,7 +62,8 @@ const CSS = `
 .tpe-points div{padding:2px 6px;cursor:pointer;font-family:ui-monospace,monospace;font-size:11px;white-space:nowrap}
 .tpe-points div:hover{background:#252d3a}.tpe-points div.sel{background:#5a2330}
 .tpe-panel button.tpe-danger{border-color:#7a2a36;color:#ff9aa8}.tpe-panel button.tpe-danger:hover{background:#4a1c24}
-.tpe-panel input[data-el=speed-wp],.tpe-panel input[data-el=roll]{width:54px}
+.tpe-panel input[data-el=speed-wp],.tpe-panel input[data-el=roll],.tpe-panel input[data-el=yaw],.tpe-panel input[data-el=time]{width:54px}
+.tpe-panel button.tpe-on{border-color:#5a7ea8;background:#2d3d52}
 .tpe-panel textarea{font:11px/1.35 ui-monospace,monospace;color:inherit;background:#252d3a;border:1px solid #364052;border-radius:4px;padding:3px 5px;width:100%;box-sizing:border-box;min-height:44px;resize:vertical}
 .tpe-panel textarea.tpe-invalid{border-color:#b04454}
 .tpe-hint{color:#8b95a7;font-size:11px}.tpe-status{color:#9fd49f;min-height:14px}
@@ -89,10 +99,35 @@ export class PathEditorPanel {
     el.addEventListener('click', this.onClick);
     el.addEventListener('change', this.onChange);
 
-    for (const type of ['change', 'select', 'view', 'pathadded', 'pathremoved', 'preview', 'previewstate', 'enabled', 'history'] as const) {
+    for (const type of ['change', 'select', 'view', 'pathadded', 'pathremoved', 'preview', 'previewstate', 'enabled', 'history', 'gizmomode', 'rigstate'] as const) {
       this.unsubscribers.push(editor.on(type, () => this.scheduleRefresh()));
     }
+    if (options.hideWhenDisabled) {
+      this.unsubscribers.push(editor.on('enabled', (enabled) => this.setVisible(enabled)));
+      this.setVisible(editor.enabled);
+    }
     this.refresh();
+  }
+
+  private refreshRigs(): void {
+    const { editor } = this;
+    const row = this.$('rig-row');
+    row.style.display = editor.rigs.length > 0 ? '' : 'none';
+    if (editor.rigs.length === 0) return;
+    const select = this.$<HTMLSelectElement>('rig');
+    const ids = editor.rigs.map((rig) => rig.id);
+    if (select.dataset.ids !== ids.join('|')) {
+      select.dataset.ids = ids.join('|');
+      select.innerHTML = ids.map((id) => `<option value="${esc(id)}">${esc(id)}</option>`).join('');
+    }
+    const flying = editor.flyingRig;
+    if (flying) select.value = flying.id;
+    this.$('rig-play').textContent = flying ? 'Stop' : 'Fly';
+  }
+
+  /** Shows or hides the panel without disposing it. */
+  setVisible(visible: boolean): void {
+    this.element.style.display = visible ? '' : 'none';
   }
 
   dispose(): void {
@@ -126,12 +161,15 @@ export class PathEditorPanel {
     const pathSelect = this.$<HTMLSelectElement>('path');
     pathSelect.innerHTML =
       `<option value="">— none —</option>` +
-      editor.paths.map((p) => `<option value="${esc(p.id)}">${esc(p.id)} (${p.dimension}D)</option>`).join('');
+      editor.paths
+        .map((p) => `<option value="${esc(p.id)}">${p.isMarker ? '◆ ' : ''}${esc(p.id)} (${p.dimension}D)</option>`)
+        .join('');
     pathSelect.value = path?.id ?? '';
 
     const denied = (action: EditorAction, waypointIndex: number | null = null) =>
       !path || !editor.can(action, path, waypointIndex);
     (this.$('preview') as HTMLButtonElement).disabled = !path;
+    this.refreshRigs();
     (this.$('pathId') as HTMLInputElement).disabled = denied('renamePath');
     (this.$('delpath') as HTMLButtonElement).disabled = denied('deletePath');
     (this.$('add') as HTMLButtonElement).disabled = denied('addWaypoint');
@@ -145,7 +183,11 @@ export class PathEditorPanel {
     setValue(this.$<HTMLInputElement>('tension'), path ? String(path.curve.tension) : '');
 
     // Waypoint list
-    this.$('count').textContent = path ? `(${path.waypoints.length}, ${path.length.toFixed(1)} u)` : '';
+    this.$('count').textContent = path
+      ? path.isMarker
+        ? '(marker)'
+        : `(${path.waypoints.length}, ${path.length.toFixed(1)} u)`
+      : '';
     this.$('points').innerHTML = path
       ? path.waypoints
           .map(
@@ -168,9 +210,17 @@ export class PathEditorPanel {
     for (const name of ['up', 'down']) (this.$(name) as HTMLButtonElement).disabled = !wp || denied('reorderWaypoint', index);
     const speedInput = this.$<HTMLInputElement>('speed-wp');
     const rollInput = this.$<HTMLInputElement>('roll');
-    speedInput.disabled = rollInput.disabled = !wp || denied('editWaypointProperties', index);
+    const yawInput = this.$<HTMLInputElement>('yaw');
+    const timeInput = this.$<HTMLInputElement>('time');
+    const propsDenied = !wp || denied('editWaypointProperties', index);
+    speedInput.disabled = rollInput.disabled = yawInput.disabled = timeInput.disabled = propsDenied;
     setValue(speedInput, wp?.speed !== undefined ? String(round(wp.speed)) : '');
     setValue(rollInput, wp?.roll !== undefined ? String(round(wp.roll)) : '');
+    setValue(yawInput, wp?.yaw !== undefined ? String(round(wp.yaw)) : '');
+    setValue(timeInput, wp?.time !== undefined ? String(round(wp.time)) : '');
+    const modeButton = this.$<HTMLButtonElement>('gizmomode');
+    modeButton.disabled = propsDenied;
+    modeButton.classList.toggle('tpe-on', editor.gizmoMode === 'rotate');
 
     const pointMeta = this.$<HTMLTextAreaElement>('meta-wp');
     pointMeta.disabled = !wp || denied('editMetadata', index);
@@ -219,6 +269,9 @@ export class PathEditorPanel {
       case 'enabled':
         editor.toggle();
         break;
+      case 'gizmomode':
+        editor.toggleGizmoMode();
+        break;
       case 'undo':
         editor.undo();
         break;
@@ -230,6 +283,9 @@ export class PathEditorPanel {
         break;
       case 'new2d':
         editor.createPathInView({ dimension: 2, id: uniqueId(editor, 'route2d') });
+        break;
+      case 'newmarker':
+        editor.createMarker({ id: uniqueId(editor, 'marker') });
         break;
       case 'delpath':
         if (!path) break;
@@ -252,6 +308,11 @@ export class PathEditorPanel {
       case 'down':
         editor.shiftSelectedWaypoint(1);
         break;
+      case 'rig': {
+        if (editor.flyingRig) editor.stopRig();
+        else editor.playRig(this.$<HTMLSelectElement>('rig').value);
+        break;
+      }
       case 'preview':
         if (path) editor.previewPath(path);
         break;
@@ -312,14 +373,16 @@ export class PathEditorPanel {
       else if (name === 'closed') path.setCurve({ closed: target.checked });
       else if (target.value !== '') path.setCurve({ tension: Number(target.value) });
     }
-    else if ((name === 'speed-wp' || name === 'roll') && path) {
+    else if ((name === 'speed-wp' || name === 'roll' || name === 'yaw' || name === 'time') && path) {
       const index = editor.selection.waypointIndex;
       if (index === null) return;
-      // Empty field = default (speed ×1, roll 0°).
+      // Empty field = the default: ×1, 0°, no yaw, no time.
       const value = target.value === '' ? null : Number(target.value);
       if (!editor.can('editWaypointProperties', path, index)) return;
       if (name === 'speed-wp') path.setWaypointProperties(index, { speed: value === null ? null : Math.max(0, value) });
-      else path.setWaypointProperties(index, { roll: value });
+      else if (name === 'roll') path.setWaypointProperties(index, { roll: value });
+      else if (name === 'yaw') path.setWaypointProperties(index, { yaw: value });
+      else path.setWaypointProperties(index, { time: value });
     } else if ((name === 'x' || name === 'y' || name === 'z') && path) {
       const index = editor.selection.waypointIndex;
       if (index === null || target.value === '') return;
@@ -369,7 +432,7 @@ export class PathEditorPanel {
     </div>
     <h4>Path</h4>
     <div class="tpe-row"><select data-el="path"></select></div>
-    <div class="tpe-row"><button data-act="new3d">+ 3D path</button><button data-act="new2d">+ 2D path</button><button data-act="reverse" data-el="reverse">Reverse</button></div>
+    <div class="tpe-row"><button data-act="new3d">+ 3D path</button><button data-act="new2d">+ 2D path</button><button data-act="newmarker" title="A single named place: spawn point, prop, light">+ Marker</button><button data-act="reverse" data-el="reverse">Reverse</button></div>
     <div class="tpe-row"><button class="tpe-danger" data-act="delpath" data-el="delpath">🗑 Delete path</button></div>
     <div class="tpe-row"><label style="flex:1">Id <input type="text" data-el="pathId"></label></div>
     <div class="tpe-row">
@@ -391,6 +454,11 @@ export class PathEditorPanel {
       <label title="Speed multiplier at this point (empty = ×1). Blended between points.">Speed × <input type="number" step="0.1" min="0" placeholder="1" data-el="speed-wp"></label>
       <label title="Bank/roll angle in degrees (positive = bank right, empty = 0).">Roll ° <input type="number" step="5" placeholder="0" data-el="roll"></label>
     </div>
+    <div class="tpe-row">
+      <label title="Facing in degrees for an object standing on this point. The rotate gizmo (R) writes it.">Yaw ° <input type="number" step="5" placeholder="—" data-el="yaw"></label>
+      <label title="Authored time at this point, in your own units. Two paths with the same times stay in step.">Time <input type="number" step="0.1" placeholder="—" data-el="time"></label>
+      <button data-act="gizmomode" data-el="gizmomode" title="Gizmo: move or turn the point (R)">Turn</button>
+    </div>
     <div class="tpe-row"><label style="flex:1;display:block">Point metadata (JSON)<textarea data-el="meta-wp" spellcheck="false"></textarea></label></div>
     <div class="tpe-row">
       <button data-act="add" data-el="add">+ Add</button><button data-act="del" data-el="del">Delete</button>
@@ -405,6 +473,10 @@ export class PathEditorPanel {
     <div class="tpe-row">
       <label>Speed <input type="number" step="0.5" min="0" data-el="speed"></label>
       <select data-el="loop"><option value="none">Once</option><option value="loop">Loop</option><option value="pingpong">Ping-pong</option></select>
+    </div>
+    <div class="tpe-row" data-el="rig-row" style="display:none">
+      <select data-el="rig" title="Camera path and what it looks at"></select>
+      <button data-act="rig" data-el="rig-play" title="Fly the editor camera along the rig">Fly</button>
     </div>
   </section>
   <section>

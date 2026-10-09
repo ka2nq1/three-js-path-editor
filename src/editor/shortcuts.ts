@@ -8,6 +8,7 @@
  *   [ / ]                select previous / next waypoint
  *   Alt + [ / ]          move selected waypoint earlier / later
  *   G                    toggle gizmos
+ *   R                    gizmo: move / turn (authors the waypoint's yaw)
  *   Cmd/Ctrl + Z         undo
  *   Cmd/Ctrl + Shift + Z redo (also Ctrl + Y)
  *
@@ -21,6 +22,7 @@ export interface ShortcutTarget {
   selectAdjacentWaypoint(delta: -1 | 1): void;
   shiftSelectedWaypoint(delta: -1 | 1): void;
   toggleView(key: 'gizmos'): unknown;
+  toggleGizmoMode(): unknown;
   undo(): unknown;
   redo(): unknown;
 }
@@ -66,6 +68,9 @@ export function bindShortcuts(target: ShortcutTarget, element: Window | HTMLElem
       }
       case 'KeyG':
         target.toggleView('gizmos');
+        break;
+      case 'KeyR':
+        target.toggleGizmoMode();
         break;
       default:
         handled = false;

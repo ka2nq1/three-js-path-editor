@@ -26,13 +26,17 @@
 | --- | --- |
 | `version` | Format version. Files newer than the installed package are rejected with a clear error. |
 | `paths[].id` | Unique per file. Game code looks paths up by id. |
+| `paths[].kind` | `"marker"` for a single named place (one point, no curve); omitted for routes. |
 | `paths[].dimension` | `2` → positions are `[x, y]`; `3` → `[x, y, z]`. |
 | `curve.type` | `"linear"`, `"catmull-rom"` or `"bezier"`. |
 | `curve.closed` | Loop back to the first point. |
 | `curve.tension` | Catmull-Rom tension (0.5 = classic). Also shapes auto Bezier handles. |
 | `curve.parametrization` | Catmull-Rom knot spacing: `"uniform"` (default), `"centripetal"`, `"chordal"`. Same meaning as `THREE.CatmullRomCurve3`'s curveType. Only written when set. |
+| `curve.linearHeight` | 3D curved paths only: interpolate height linearly between points so a segment cannot dip below the floor the points sit on. Only written when set. |
 | `points[].speed` | Speed multiplier at this point (default 1). Blended between points by the follower's `interpolation`. |
 | `points[].roll` | Bank angle in degrees (default 0, positive = bank right). Applied around the travel direction. |
+| `points[].yaw` | Facing in degrees around the up axis for an object standing on this point. Travel ignores it. |
+| `points[].time` | Authored time at this point, in the host's units. Two paths with the same times can be sampled at the same time (`Path.getPointAtTime`). |
 | `points[].handleIn/handleOut` | Bezier only, **relative** to the point. Missing = automatic smooth handles. |
 | `metadata` | Any JSON, on paths and points. Preserved on import/export. |
 | any other key | Preserved on import/export (file, path and point level). |

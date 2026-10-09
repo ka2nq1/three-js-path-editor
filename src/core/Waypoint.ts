@@ -10,10 +10,15 @@ export interface WaypointInit {
   speed?: number | null;
   /** Bank/roll angle at this waypoint in degrees. Positive = bank right. */
   roll?: number | null;
+  /** Facing in degrees around the up axis for something standing here. */
+  yaw?: number | null;
+  /** Authored time at this waypoint, in the host's own units. */
+  time?: number | null;
   metadata?: Metadata;
 }
 
-const KNOWN_KEYS = new Set(['id', 'position', 'handleIn', 'handleOut', 'speed', 'roll', 'metadata']);
+const KNOWN_KEYS = new Set(['id', 'position', 'handleIn', 'handleOut', 'speed', 'roll', 'yaw', 'time', 'metadata']);
+const NUMBER_FIELDS = ['speed', 'roll', 'yaw', 'time'] as const;
 
 /**
  * A point on a path, stored in path space. For 2D paths the third component is
@@ -33,6 +38,20 @@ export class Waypoint {
   speed?: number;
   /** Roll (bank) angle in degrees at this waypoint; `undefined` = 0. Positive banks right. */
   roll?: number;
+  /**
+   * Facing in degrees around the up axis, for an object that stands on this
+   * point: a unit's spawn heading, a prop's orientation. Authored with the
+   * editor's rotate gizmo. Travel along the path ignores it — a follower takes
+   * its heading from the curve tangent.
+   */
+  yaw?: number;
+  /**
+   * Authored time at this waypoint, in whatever unit the host uses (seconds,
+   * beats, normalized progress). Two paths that carry the same times can be
+   * sampled at the same time and stay in step — a camera path and what it
+   * looks at, for instance. See `Path.distanceAtTime`.
+   */
+  time?: number;
   metadata: Metadata;
   /** Unknown JSON keys, preserved on export. */
   extras: Record<string, unknown>;
@@ -42,8 +61,10 @@ export class Waypoint {
     this.position = toVec3(init.position);
     this.handleIn = init.handleIn ? toVec3(init.handleIn) : null;
     this.handleOut = init.handleOut ? toVec3(init.handleOut) : null;
-    if (typeof init.speed === 'number' && Number.isFinite(init.speed)) this.speed = init.speed;
-    if (typeof init.roll === 'number' && Number.isFinite(init.roll)) this.roll = init.roll;
+    for (const key of NUMBER_FIELDS) {
+      const value = init[key];
+      if (typeof value === 'number' && Number.isFinite(value)) this[key] = value;
+    }
     this.metadata = init.metadata ? structuredCloneSafe(init.metadata) : {};
     this.extras = structuredCloneSafe(extras);
   }
@@ -57,8 +78,7 @@ export class Waypoint {
     if (this.id !== undefined) out.id = this.id;
     if (this.handleIn) out.handleIn = this.handleIn.slice(0, dimension);
     if (this.handleOut) out.handleOut = this.handleOut.slice(0, dimension);
-    if (this.speed !== undefined) out.speed = this.speed;
-    if (this.roll !== undefined) out.roll = this.roll;
+    for (const key of NUMBER_FIELDS) if (this[key] !== undefined) out[key] = this[key];
     if (Object.keys(this.metadata).length > 0) out.metadata = structuredCloneSafe(this.metadata);
     return out;
   }

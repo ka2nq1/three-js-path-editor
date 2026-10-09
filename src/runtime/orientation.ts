@@ -13,7 +13,14 @@ export interface OrientationOptions {
   up?: Vec3;
   /** World up used to keep the object upright. Default [0, 1, 0]. */
   worldUp?: Vec3;
-  /** Ignore pitch: only rotate around `worldUp` (cars, characters). Default false. */
+  /**
+   * Ignore pitch: only rotate around `worldUp` (cars, characters). Default false.
+   *
+   * The follower writes rotations as quaternions, so for a heading outside
+   * ±90° the object's Euler reads x/z = ±180° and `rotation.y` is the
+   * mirrored angle. Read and write the heading through `PathFollower.yaw` /
+   * `setYaw()` (or `Orienter.yawOf` / `yawTo`) instead of `rotation.y`.
+   */
   yawOnly?: boolean;
   /** Extra rotation in model space (Euler XYZ, radians), e.g. to compensate a tilted model. */
   offset?: Vec3;
@@ -33,6 +40,8 @@ const _f = new Vector3();
 const _r = new Vector3();
 const _u = new Vector3();
 const _roll = new Quaternion();
+const _frame = new Quaternion();
+const _heading = new Vector3();
 
 /**
  * Computes a world rotation that maps the model's forward axis onto a travel
@@ -44,9 +53,14 @@ export class Orienter {
   yawOnly: boolean;
   applyRoll: boolean;
   rollScale: number;
-  private readonly worldUp: Vector3;
+  /** World up the object is kept upright against. */
+  readonly worldUp: Vector3;
   /** inverse(model basis) * offset, precomputed. */
   private readonly modelCorrection = new Quaternion();
+  private readonly modelCorrectionInverse = new Quaternion();
+  /** Yaw reference axes: the plane orthogonal to `worldUp`, yaw 0 along `zero`. */
+  private readonly zero = new Vector3();
+  private readonly quarter = new Vector3();
 
   constructor(options: OrientationOptions = {}) {
     this.enabled = options.enabled ?? true;
@@ -68,6 +82,35 @@ export class Orienter {
       const offsetQ = new Quaternion().setFromEuler(new Euler(...options.offset));
       this.modelCorrection.multiply(offsetQ);
     }
+    this.modelCorrectionInverse.copy(this.modelCorrection).invert();
+
+    // Yaw 0 points along whichever world axis is least parallel to worldUp, so
+    // the reference frame is well-defined for any up vector. Y-up scenes get
+    // the usual +Z / +X pair, i.e. yaw = atan2(x, z).
+    this.zero.set(0, 0, 1);
+    if (Math.abs(this.zero.dot(this.worldUp)) > 0.99) this.zero.set(1, 0, 0);
+    this.zero.addScaledVector(this.worldUp, -this.zero.dot(this.worldUp)).normalize();
+    this.quarter.crossVectors(this.worldUp, this.zero).normalize();
+  }
+
+  /**
+   * Heading of a rotation around `worldUp`, in radians, as `yawTo` takes it.
+   * Use it instead of reading `object.rotation.y`, which is mirrored for
+   * headings outside ±90° (see `yawOnly`).
+   */
+  yawOf(rotation: Quaternion): number {
+    _frame.copy(rotation).multiply(this.modelCorrectionInverse);
+    _heading.set(0, 0, 1).applyQuaternion(_frame);
+    return Math.atan2(_heading.dot(this.quarter), _heading.dot(this.zero));
+  }
+
+  /**
+   * Writes the rotation for a heading around `worldUp` into `target`, the
+   * inverse of `yawOf`. Returns false when the heading is degenerate.
+   */
+  yawTo(yaw: number, target: Quaternion): boolean {
+    _heading.copy(this.zero).multiplyScalar(Math.cos(yaw)).addScaledVector(this.quarter, Math.sin(yaw));
+    return this.compute(_heading, target);
   }
 
   /**

@@ -3,6 +3,8 @@ import {
   ConeGeometry,
   GridHelper,
   Group,
+  LineBasicMaterial,
+  Matrix4,
   Mesh,
   MeshBasicMaterial,
   Object3D,
@@ -21,8 +23,9 @@ import {
   type CoordinateSystemOptions,
 } from '../core/coordinates';
 import { Path, type PathOptions } from '../core/Path';
+import type { Waypoint } from '../core/Waypoint';
 import { readPathFile, serializePaths, stringifyPaths } from '../core/serialization';
-import type { PathData, PathFileData } from '../core/types';
+import type { PathData, PathDimension, PathFileData } from '../core/types';
 import {
   EditorState,
   type EditorSelection,
@@ -34,7 +37,10 @@ import { averageSpacing, insertWaypointAfter, insertWaypointAtT, shiftWaypoint }
 import { bindShortcuts } from '../editor/shortcuts';
 import { Emitter, type Listener } from '../utils/Emitter';
 import { add, length as vecLength, normalize, scale, sub, toVec3 } from '../utils/vec3';
-import { planePlacement, type PlacementProvider, type WaypointConstraint } from './placement';
+import { Orienter } from '../runtime/orientation';
+import { isEditorObject, pathUp, planePlacement, type PlacementProvider, type WaypointConstraint } from './placement';
+import { CameraRig, type CameraRigOptions } from './CameraRig';
+import { SurfaceCheck, type SurfaceCheckOptions } from './SurfaceCheck';
 import { PathPreview, type PathPreviewOptions } from './PathPreview';
 import { worldUnitsPerPixel } from './screen';
 import { ThreePathRenderer, type PathPickData, type ThreePathRendererOptions } from './ThreePathRenderer';
@@ -57,14 +63,69 @@ export interface PathEditorOptions {
   /** Editor grid helper. Default size 100, 20 divisions. */
   grid?: { size?: number; divisions?: number; color?: number; centerColor?: number };
   /**
-   * Your camera controls (OrbitControls, MapControls...). The editor sets
-   * `enabled = false` while a gizmo is dragged and restores it afterwards.
+   * Your camera controls (OrbitControls, MapControls...). The editor suspends
+   * them while a gizmo is dragged and releases them afterwards. Host gizmos
+   * must go through `suspendCameraControls()` rather than writing `enabled`
+   * themselves, so two overlapping drags can't leave the camera switched off.
    */
-  cameraControls?: { enabled: boolean } | null;
+  cameraControls?: CameraControlsLike | null;
+  /**
+   * Other gizmos or controls in the scene that may own a pointer press (a host
+   * `TransformControls`). While one of them reports an `axis`, the editor
+   * leaves the press alone: it neither selects nor clears the selection, so
+   * clicking a host gizmo no longer deselects the waypoint it belongs to.
+   */
+  otherControls?: GizmoLike[];
+  /**
+   * Called first for every pointer press in the viewport. Return true to tell
+   * the editor the press belongs to the host (its own gizmo, a 3D widget): the
+   * editor ignores it completely and lets it through.
+   */
+  claimPointer?: (event: PointerEvent) => boolean;
+  /**
+   * Keeps the camera controls' pivot (`target`) on the surface under the
+   * pointer, on the view axis so the view never jumps. Bare `OrbitControls`
+   * scale zoom and pan by the distance to `target`, so both stall near a fixed
+   * pivot. Needs controls with a `target` vector. Default false.
+   */
+  pivotUnderPointer?: boolean | PivotOptions;
+  /**
+   * While the editor is enabled, hide and block every element on the page
+   * except the viewport and elements marked `data-path-editor-ui`, so the
+   * game's own UI cannot cover the canvas or swallow presses. Uses
+   * `visibility`, so layouts keep their size. Default false.
+   */
+  isolateUi?: boolean;
+  /**
+   * Move the camera out of its rig into the scene for the editing session and
+   * put it back on `disable()`. Camera controls cannot orbit a camera that a
+   * rig drives, so hosts otherwise have to detach it themselves. Implies
+   * `restoreCameraOnDisable`. Default false.
+   */
+  detachCamera?: boolean;
   /** Where Shift+click places new waypoints. Default: `planePlacement()`. */
   placement?: PlacementProvider;
+  /**
+   * Camera paths paired with what they look at. The editor draws sight lines
+   * between the matching points and can fly its own camera along a rig
+   * (`playRig`). See `CameraRig`.
+   */
+  rigs?: CameraRigOptions[];
+  /**
+   * Floors or terrain the paths are authored on. Spans of a curve that run
+   * below them get a warning tick in the view (toggle `surface`), which is how
+   * a spline sagging under a floor between two points becomes visible — see
+   * `curve.linearHeight`.
+   */
+  surface?: SurfaceCheckOptions['objects'] | SurfaceCheckOptions;
   /** Enable keyboard shortcuts (see editor/shortcuts). Default true. */
   keyboardShortcuts?: boolean;
+  /**
+   * What the gizmo does: 'translate' (default) moves the selected waypoint,
+   * 'rotate' authors its `yaw` — the facing of whatever stands on it. Toggled
+   * with R, or `setGizmoMode()`.
+   */
+  gizmoMode?: GizmoMode;
   /** Keep Bezier handles of a waypoint collinear while dragging one. Default true. */
   mirrorBezierHandles?: boolean;
   /** Enable immediately. Default false: call `enable()`. */
@@ -98,6 +159,37 @@ export interface PathEditorOptions {
   constrainWaypoint?: WaypointConstraint;
 }
 
+/** What the editor's gizmo edits: the waypoint's position or its `yaw`. */
+export type GizmoMode = 'translate' | 'rotate';
+
+/** The part of camera controls the editor uses (OrbitControls and friends). */
+export interface CameraControlsLike {
+  enabled: boolean;
+  /** Orbit pivot, used by `pivotUnderPointer`. */
+  target?: Vector3;
+}
+
+/** The part of a `TransformControls` the editor reads to see who owns a press. */
+export interface GizmoLike {
+  /** The axis under the pointer, or being dragged; null when the gizmo is idle. */
+  axis: string | null;
+  /** True while a drag is in progress (`TransformControls` has it). */
+  dragging?: boolean;
+}
+
+export interface PivotOptions {
+  /**
+   * Objects the pivot ray tests. Default: everything in the scene except the
+   * editor's own objects.
+   */
+  objects?: Object3D[] | (() => Object3D[]);
+  /**
+   * Minimum distance kept between the camera and the pivot, so the wheel and
+   * pan keep usable steps right at a surface. Default 1.
+   */
+  minDistance?: number;
+}
+
 export type EditorAction =
   | 'addWaypoint'
   | 'deleteWaypoint'
@@ -123,6 +215,16 @@ export interface PathEditorEvents {
   pathadded: { path: Path };
   pathremoved: { path: Path };
   import: { paths: Path[] };
+  /**
+   * A waypoint was deleted through the editor (UI, shortcut or API), with the
+   * waypoint that is gone and the index it sat at. Fires in the same task as
+   * the deletion, so edits made in the handler join its undo step.
+   */
+  waypointremoved: { path: Path; index: number; waypoint: Waypoint };
+  /** The gizmo switched between moving a waypoint and turning it. */
+  gizmomode: GizmoMode;
+  /** A camera rig flight started or stopped (`playRig` / `stopRig`, or the end of the flight). */
+  rigstate: { rig: CameraRig; playing: boolean };
   dragstart: { path: Path; waypointIndex: number };
   dragend: { path: Path; waypointIndex: number };
   enabled: boolean;
@@ -162,6 +264,7 @@ export interface EditorSessionState {
   selection: EditorSelection;
   view: EditorViewOptions;
   camera: { position: number[]; quaternion: number[] };
+  gizmoMode?: GizmoMode;
 }
 
 export interface SessionStorageLike {
@@ -186,12 +289,54 @@ export interface CreatePathOptions extends PathOptions {
   select?: boolean;
 }
 
+export interface CreateMarkerOptions extends Omit<CreatePathOptions, 'points' | 'curve' | 'kind'> {
+  /** Path-space position. Default: the middle of the view. */
+  position?: ArrayLike<number>;
+  /** Facing in degrees around the up axis. */
+  yaw?: number;
+}
+
+/** A marker is one point with no curve, so these edits never apply to it. */
+const MARKER_DENIED = new Set<EditorAction>(['addWaypoint', 'editCurve']);
+
 type TransformControlsLike = TransformControls & { getHelper?: () => Object3D };
 
 const CLICK_TOLERANCE_PX = 5;
 /** Elements carrying this attribute (the panel, host dev UI) are never reported as blocking input. */
 export const EDITOR_UI_ATTRIBUTE = 'data-path-editor-ui';
+/** Set on `domElement` while the editor is enabled; `isolateUi` keeps it visible. */
+export const EDITOR_VIEWPORT_ATTRIBUTE = 'data-path-editor-viewport';
+const ISOLATED_CLASS = 'path-editor-isolated-ui';
+const ISOLATION_STYLE_ID = 'three-path-editor-isolation-style';
+// visibility, not display, so the host's layout keeps its size and comes back
+// untouched; a visible descendant of a hidden element is still shown.
+const ISOLATION_CSS = `
+html.${ISOLATED_CLASS} body * { visibility: hidden !important; pointer-events: none !important; }
+html.${ISOLATED_CLASS} [${EDITOR_VIEWPORT_ATTRIBUTE}],
+html.${ISOLATED_CLASS} [${EDITOR_UI_ATTRIBUTE}],
+html.${ISOLATED_CLASS} [${EDITOR_UI_ATTRIBUTE}] * { visibility: visible !important; pointer-events: auto !important; }
+`;
+
+function injectIsolationStyle(): void {
+  if (document.getElementById(ISOLATION_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = ISOLATION_STYLE_ID;
+  style.textContent = ISOLATION_CSS;
+  document.head.appendChild(style);
+}
+
+/** Keeps authored angles short in JSON; a tenth of a degree is beyond notice. */
+function roundAngle(degrees: number): number {
+  const wrapped = ((((degrees + 180) % 360) + 360) % 360) - 180;
+  return Number(wrapped.toFixed(1));
+}
+
 const _v = new Vector3();
+const _target = new Vector3();
+const _camera = new Vector3();
+const _forward = new Vector3();
+const _matrix = new Matrix4();
+const _hits: Intersection[] = [];
 const _ndc = new Vector2();
 
 /**
@@ -212,8 +357,12 @@ export class PathEditor {
   readonly domElement: HTMLElement;
   readonly coordinates: CoordinateSystem;
   camera: Camera;
-  cameraControls: { enabled: boolean } | null;
+  cameraControls: CameraControlsLike | null;
   placement: PlacementProvider;
+  /** See `PathEditorOptions.otherControls`. Host gizmos can be added later. */
+  readonly otherControls: GizmoLike[];
+  /** See `PathEditorOptions.claimPointer`. Can be replaced at any time. */
+  claimPointer: ((event: PointerEvent) => boolean) | null;
   /** See `PathEditorOptions.constrainWaypoint`. Can be replaced at any time. */
   constrainWaypoint: WaypointConstraint | null;
   mirrorBezierHandles: boolean;
@@ -222,17 +371,31 @@ export class PathEditor {
   private readonly renderers = new Map<Path, ThreePathRenderer>();
   private readonly raycaster = new Raycaster();
   private readonly helpers = new Group();
+  private readonly rigGroup = new Group();
+  private readonly rigList: CameraRig[] = [];
+  private rigMaterial: LineBasicMaterial | null = null;
+  private readonly surfaceCheck: SurfaceCheck | null;
+  private surfaceMaterial: LineBasicMaterial | null = null;
+  private flight: { rig: CameraRig; elapsed: number; release: () => void; position: Vector3; quaternion: Quaternion } | null = null;
   private readonly gizmoProxy = new Object3D();
   private readonly keyboardShortcuts: boolean;
+  private _gizmoMode: GizmoMode = 'translate';
+  private readonly yawOrienters = new Map<PathDimension, Orienter>();
   private readonly diagnostics: boolean;
   private blockedInputWarned = false;
   private readonly restoreCameraOnDisable: boolean;
+  private readonly detachCamera: boolean;
+  private readonly isolateUi: boolean;
+  private readonly pivot: PivotOptions | null;
+  private detachedCamera: { parent: Object3D; camera: Camera } | null = null;
   private readonly canEditOption: PathEditorOptions['canEdit'];
   private savedCameraPose: { position: Vector3; quaternion: Quaternion; camera: Camera } | null = null;
   private transformControls: TransformControlsLike | null = null;
   private _enabled = false;
   private dragging = false;
+  private cameraSuspensions = 0;
   private cameraControlsWereEnabled = true;
+  private releaseDragCamera: (() => void) | null = null;
   private pointerDown: { x: number; y: number; gizmo: boolean } | null = null;
   private unbindShortcuts: (() => void) | null = null;
   private _preview: PathPreview | null = null;
@@ -251,12 +414,22 @@ export class PathEditor {
       ? options.coordinates
       : createCoordinateSystem(options.coordinates);
     this.cameraControls = options.cameraControls ?? null;
+    this.otherControls = options.otherControls ?? [];
+    this.claimPointer = options.claimPointer ?? null;
     this.placement = options.placement ?? planePlacement();
     this.constrainWaypoint = options.constrainWaypoint ?? null;
     this.keyboardShortcuts = options.keyboardShortcuts ?? true;
+    this._gizmoMode = options.gizmoMode ?? 'translate';
     this.mirrorBezierHandles = options.mirrorBezierHandles ?? true;
     this.diagnostics = options.diagnostics ?? true;
-    this.restoreCameraOnDisable = options.restoreCameraOnDisable ?? false;
+    this.detachCamera = options.detachCamera ?? false;
+    this.restoreCameraOnDisable = (options.restoreCameraOnDisable ?? false) || this.detachCamera;
+    this.isolateUi = options.isolateUi ?? false;
+    this.pivot = options.pivotUnderPointer
+      ? typeof options.pivotUnderPointer === 'object'
+        ? options.pivotUnderPointer
+        : {}
+      : null;
     this.canEditOption = options.canEdit;
     this.renderOptions = options.render ?? {};
     this.state = new EditorState(options.view);
@@ -266,8 +439,13 @@ export class PathEditor {
     this.root.name = 'PathEditorRoot';
     this.root.userData.pathEditor = true;
     this.gizmoProxy.name = 'PathEditorGizmoTarget';
+    this.rigGroup.name = 'PathEditorRigs';
+    this.rigGroup.userData.pathEditor = true;
     this.buildHelpers(options.grid ?? {});
-    this.root.add(this.helpers, this.gizmoProxy);
+    this.root.add(this.helpers, this.gizmoProxy, this.rigGroup);
+    for (const rig of options.rigs ?? []) this.addRig(rig);
+    this.surfaceCheck = options.surface ? this.buildSurfaceCheck(options.surface) : null;
+    if (this.surfaceCheck) this.root.add(this.surfaceCheck.group);
 
     this.state.events.on('paths', () => this.syncRenderers());
     this.state.events.on('pathchange', (path) => this.events.emit('change', { path }));
@@ -310,6 +488,29 @@ export class PathEditor {
     return this.state.view;
   }
 
+  /** See `PathEditorOptions.gizmoMode`. */
+  get gizmoMode(): GizmoMode {
+    return this._gizmoMode;
+  }
+
+  /**
+   * Switches the gizmo between moving the selected waypoint and turning it
+   * (authoring its `yaw`). Rotating needs the `editWaypointProperties`
+   * permission, the same as speed and roll.
+   */
+  setGizmoMode(mode: GizmoMode): this {
+    if (mode === this._gizmoMode) return this;
+    this._gizmoMode = mode;
+    this.transformControls?.setMode(mode);
+    this.syncSelection();
+    this.events.emit('gizmomode', mode);
+    return this;
+  }
+
+  toggleGizmoMode(): this {
+    return this.setGizmoMode(this._gizmoMode === 'translate' ? 'rotate' : 'translate');
+  }
+
   on<K extends keyof PathEditorEvents>(type: K, listener: Listener<PathEditorEvents[K]>): () => void {
     return this.events.on(type, listener);
   }
@@ -322,8 +523,13 @@ export class PathEditor {
     return this.renderers.get(path);
   }
 
-  /** Whether `canEdit` allows `action` (true when no `canEdit` was given). */
+  /**
+   * Whether `action` is allowed on `path`: a marker never grows points or
+   * curve settings, and beyond that whatever `canEdit` says (everything, when
+   * no `canEdit` was given).
+   */
   can(action: EditorAction, path: Path, waypointIndex: number | null = null): boolean {
+    if (path.isMarker && MARKER_DENIED.has(action)) return false;
     return this.canEditOption?.(action, { path, waypointIndex }) ?? true;
   }
 
@@ -348,13 +554,25 @@ export class PathEditor {
         quaternion: this.camera.quaternion.clone(),
       };
     }
+    if (this.detachCamera) this.takeCameraOutOfRig();
     this.scene.add(this.root);
     const tc = this.ensureTransformControls();
     tc.enabled = true;
-    this.domElement.addEventListener('pointerdown', this.onPointerDown, { capture: true });
+    // On `window` in the capture phase: listeners on the canvas itself run in
+    // registration order, and TransformControls registered its own first, so
+    // only a capture listener further up the tree can claim a press before it.
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pointerdown', this.onPointerDown, { capture: true });
+      window.addEventListener('pointerdown', this.onWindowPointerDown, { capture: true });
+      if (this.pivot) {
+        window.addEventListener('pointerdown', this.movePivot, { capture: true });
+        window.addEventListener('wheel', this.movePivot, { capture: true, passive: true });
+      }
+    }
     this.domElement.addEventListener('pointerup', this.onPointerUp);
     this.domElement.addEventListener('dblclick', this.onDoubleClick);
-    if (typeof window !== 'undefined') window.addEventListener('pointerdown', this.onWindowPointerDown, { capture: true });
+    this.domElement.setAttribute(EDITOR_VIEWPORT_ATTRIBUTE, '');
+    if (this.isolateUi) this.setUiIsolated(true);
     if (this.keyboardShortcuts && typeof window !== 'undefined') this.unbindShortcuts = bindShortcuts(this);
     this.syncSelection();
     this.events.emit('enabled', true);
@@ -365,18 +583,29 @@ export class PathEditor {
   disable(): this {
     if (!this._enabled) return this;
     this._enabled = false;
-    this.domElement.removeEventListener('pointerdown', this.onPointerDown, { capture: true });
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('pointerdown', this.onPointerDown, { capture: true });
+      window.removeEventListener('pointerdown', this.onWindowPointerDown, { capture: true });
+      window.removeEventListener('pointerdown', this.movePivot, { capture: true });
+      window.removeEventListener('wheel', this.movePivot, { capture: true });
+    }
     this.domElement.removeEventListener('pointerup', this.onPointerUp);
     this.domElement.removeEventListener('dblclick', this.onDoubleClick);
-    if (typeof window !== 'undefined') window.removeEventListener('pointerdown', this.onWindowPointerDown, { capture: true });
+    this.domElement.removeAttribute(EDITOR_VIEWPORT_ATTRIBUTE);
+    if (this.isolateUi) this.setUiIsolated(false);
     this.unbindShortcuts?.();
     this.unbindShortcuts = null;
     if (this.transformControls) {
+      // Disabling TransformControls mid-drag leaves it dragging forever: it
+      // ignores the pointerup that would have ended the drag, and then never
+      // grabs another press.
+      this.stopGizmoDrag();
       this.transformControls.detach();
       this.transformControls.enabled = false;
     }
     this.endDrag();
     this.root.removeFromParent();
+    if (this.detachedCamera) this.putCameraBackInRig();
     if (this.savedCameraPose) {
       const { camera, position, quaternion } = this.savedCameraPose;
       camera.position.copy(position);
@@ -392,11 +621,57 @@ export class PathEditor {
     return this._enabled ? this.disable() : this.enable();
   }
 
+  /**
+   * Switches the host's camera controls off until the returned function is
+   * called. Suspensions are counted, so the editor's gizmo and a host gizmo
+   * can hold one at the same time without either restoring the other's state
+   * — what the controls had before the first suspension is what comes back
+   * after the last release. Releasing twice does nothing.
+   */
+  suspendCameraControls(): () => void {
+    const controls = this.cameraControls;
+    if (this.cameraSuspensions++ === 0 && controls) {
+      this.cameraControlsWereEnabled = controls.enabled;
+      controls.enabled = false;
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (--this.cameraSuspensions > 0) return;
+      const current = this.cameraControls;
+      if (current) current.enabled = this.cameraControlsWereEnabled;
+    };
+  }
+
+  /**
+   * True while a gizmo owns the pointer: the editor's own is dragging or has an
+   * axis under the pointer, or one of `otherControls` has. Host code can ask
+   * this before treating a press as its own.
+   */
+  get gizmoEngaged(): boolean {
+    return this.dragging || (this.transformControls?.axis ?? null) !== null || this.otherGizmoEngaged;
+  }
+
+  /**
+   * The editor's own transform gizmo, as much of it as a host needs to see who
+   * owns a press. Null until the first `enable()`.
+   */
+  get gizmo(): GizmoLike | null {
+    return this.transformControls;
+  }
+
   /** Disables the editor and releases every GPU resource and listener it created. */
   dispose(): void {
     if (this.disposed) return;
     this.disable();
     this.detachPreview();
+    for (const rig of this.rigList.splice(0)) rig.dispose();
+    this.rigMaterial?.dispose();
+    this.rigMaterial = null;
+    this.surfaceCheck?.dispose();
+    this.surfaceMaterial?.dispose();
+    this.surfaceMaterial = null;
     this.history.dispose();
     for (const renderer of this.renderers.values()) renderer.dispose();
     this.renderers.clear();
@@ -422,12 +697,128 @@ export class PathEditor {
     for (const renderer of this.renderers.values()) renderer.update(this.camera, height);
     if (!this.dragging) this.syncGizmoPosition();
     this._preview?.update(dt);
+    for (const rig of this.rigList) rig.update(this.state.view.sightlines);
+    this.surfaceCheck?.update(this.state.paths, this.state.view.surface);
+    this.advanceFlight(dt);
   }
 
   /** Switch to a different camera (e.g. when the game changes cameras). */
   setCamera(camera: Camera): void {
     this.camera = camera;
     if (this.transformControls) (this.transformControls as unknown as { camera: Camera }).camera = camera;
+  }
+
+  // -------------------------------------------------------------- camera rigs
+
+  /** Pairs a camera path with the path it looks at. See `CameraRig`. */
+  addRig(options: CameraRigOptions): CameraRig {
+    if (!this.rigMaterial) {
+      this.rigMaterial = new LineBasicMaterial({
+        color: 0x8be0ff,
+        transparent: true,
+        opacity: 0.45,
+        depthTest: false,
+        depthWrite: false,
+      });
+    }
+    const rig = new CameraRig(options, {
+      resolve: (id) => this.getPath(id),
+      coordinates: this.coordinates,
+      material: this.rigMaterial,
+    });
+    this.rigList.push(rig);
+    this.rigGroup.add(rig.group);
+    return rig;
+  }
+
+  removeRig(rig: CameraRig | string): void {
+    const found = typeof rig === 'string' ? this.rigList.find((r) => r.id === rig) : rig;
+    if (!found) return;
+    if (this.flight?.rig === found) this.stopRig();
+    this.rigList.splice(this.rigList.indexOf(found), 1);
+    found.dispose();
+  }
+
+  get rigs(): readonly CameraRig[] {
+    return this.rigList;
+  }
+
+  /** The surface-sag check, when a `surface` was given. See `SurfaceCheck`. */
+  get surfaceWarnings(): SurfaceCheck | null {
+    return this.surfaceCheck;
+  }
+
+  getRig(id: string): CameraRig | undefined {
+    return this.rigList.find((rig) => rig.id === id);
+  }
+
+  /** The rig the editor's camera is currently flying, if any. */
+  get flyingRig(): CameraRig | null {
+    return this.flight?.rig ?? null;
+  }
+
+  /**
+   * Flies the editor's camera along a rig, looking at the matching point of
+   * its target path, so the framing can be judged without restarting the game.
+   * The camera pose is restored when the flight ends or is stopped, and the
+   * host's camera controls are suspended while it runs.
+   */
+  playRig(rig: CameraRig | string): boolean {
+    const found = typeof rig === 'string' ? this.getRig(rig) : rig;
+    if (!found || !found.sample(0, _v, _target)) return false;
+    this.stopRig();
+    this.flight = {
+      rig: found,
+      elapsed: 0,
+      release: this.suspendCameraControls(),
+      position: this.camera.position.clone(),
+      quaternion: this.camera.quaternion.clone(),
+    };
+    this.applyFlight(0);
+    this.events.emit('rigstate', { rig: found, playing: true });
+    return true;
+  }
+
+  /** Stops a rig flight and puts the camera back where it was. */
+  stopRig(): void {
+    const flight = this.flight;
+    if (!flight) return;
+    this.flight = null;
+    flight.release();
+    this.camera.position.copy(flight.position);
+    this.camera.quaternion.copy(flight.quaternion);
+    this.camera.updateMatrixWorld();
+    this.events.emit('rigstate', { rig: flight.rig, playing: false });
+  }
+
+  private buildSurfaceCheck(surface: NonNullable<PathEditorOptions['surface']>): SurfaceCheck {
+    const options: SurfaceCheckOptions = Array.isArray(surface) || typeof surface === 'function' ? { objects: surface } : surface;
+    this.surfaceMaterial = new LineBasicMaterial({
+      color: 0xff4d6d,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    });
+    return new SurfaceCheck(options, { coordinates: this.coordinates, material: this.surfaceMaterial });
+  }
+
+  private advanceFlight(dt: number): void {
+    const flight = this.flight;
+    if (!flight) return;
+    flight.elapsed += dt;
+    const time = flight.rig.flightTime;
+    const u = time > 0 ? flight.elapsed / time : 1;
+    this.applyFlight(Math.min(u, 1));
+    if (u >= 1) this.stopRig();
+  }
+
+  private applyFlight(u: number): void {
+    const flight = this.flight!;
+    if (!flight.rig.sample(u, _v, _target)) return;
+    this.camera.position.copy(_v);
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(_target);
+    this.camera.updateMatrixWorld();
   }
 
   // ------------------------------------------------------------------- paths
@@ -461,6 +852,34 @@ export class PathEditor {
       return this.coordinates.toPath(world.toArray(), dimension);
     });
     return this.createPath({ ...options, dimension, points: options.points ?? points });
+  }
+
+  /**
+   * Creates a marker: one named place, no curve — a spawn point, a prop, a
+   * light. It is a `Path` with `kind: 'marker'`, so it is selected, moved,
+   * turned, undone and saved exactly like a path, and lives in the same file.
+   * Without a position it lands in the middle of the view.
+   */
+  createMarker(options: CreateMarkerOptions = {}): Path {
+    const dimension = options.dimension ?? 3;
+    const position = options.position ?? this.coordinates.toPath(this.getViewCenter(dimension).toArray(), dimension);
+    const marker = this.createPath({
+      ...options,
+      kind: 'marker',
+      dimension,
+      points: [{ position, yaw: options.yaw }],
+    });
+    return marker;
+  }
+
+  /** Markers only (`kind: 'marker'`). `paths` holds both. */
+  get markers(): Path[] {
+    return this.state.paths.filter((path) => path.isMarker);
+  }
+
+  /** Routes only, i.e. everything that is not a marker. `paths` holds both. */
+  get routes(): Path[] {
+    return this.state.paths.filter((path) => !path.isMarker);
   }
 
   /** Adds a Path (or PathData) to the editor, replacing a path with the same id. */
@@ -611,9 +1030,12 @@ export class PathEditor {
   removeWaypoint(pathId: string, index: number): void {
     const path = this.getPath(pathId);
     if (!path || !path.waypoints[index] || !this.allow('deleteWaypoint', path, index)) return;
-    path.removeWaypoint(index);
+    const waypoint = path.removeWaypoint(index)!;
     const n = path.waypoints.length;
     this.state.select(path.id, n === 0 ? null : Math.min(index, n - 1));
+    // In the same synchronous task as the removal, so edits a listener makes
+    // (handing a name on to a neighbour, say) land in the same undo step.
+    this.events.emit('waypointremoved', { path, index, waypoint });
   }
 
   /** Moves a waypoint to a new position (path space). */
@@ -747,6 +1169,7 @@ export class PathEditor {
       selection: { ...this.selection },
       view: { ...this.view },
       camera: { position: this.camera.position.toArray(), quaternion: this.camera.quaternion.toArray() },
+      gizmoMode: this._gizmoMode,
     };
     try {
       storage.setItem(key, JSON.stringify(state));
@@ -775,6 +1198,7 @@ export class PathEditor {
     }
     if (!state || state.version !== 1) return false;
     if (state.view) this.setView(state.view);
+    if (state.gizmoMode === 'rotate' || state.gizmoMode === 'translate') this.setGizmoMode(state.gizmoMode);
     const selection = state.selection;
     if (selection?.pathId && this.getPath(selection.pathId)) {
       const path = this.getPath(selection.pathId)!;
@@ -862,15 +1286,20 @@ export class PathEditor {
   // ---------------------------------------------------------------- internal
 
   /**
-   * Registered in the capture phase so it runs before TransformControls and
-   * camera controls. Pressing a marker that is not the current gizmo target
-   * selects it immediately and stops the event — otherwise gizmo arrows that
-   * overlap nearby markers (e.g. Bezier handles) would steal the click.
+   * Registered on `window` in the capture phase, so it runs before the
+   * listeners TransformControls and the camera controls put on the canvas.
+   * Pressing a marker that is not the current gizmo target selects it
+   * immediately and stops the event — otherwise gizmo arrows that overlap
+   * nearby markers (e.g. Bezier handles) would steal the click.
    */
   private readonly onPointerDown = (e: PointerEvent): void => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || !this.isInViewport(e.target)) return;
+    if (this.claimPointer?.(e)) {
+      this.pointerDown = null;
+      return;
+    }
     const tc = this.transformControls;
-    if (!e.shiftKey && !this.dragging) {
+    if (!e.shiftKey && !this.dragging && !this.otherGizmoEngaged) {
       const hit = this.pick(e.clientX, e.clientY, { markersOnly: true });
       const sel = this.selection;
       const isGizmoTarget =
@@ -882,7 +1311,11 @@ export class PathEditor {
         return;
       }
     }
-    this.pointerDown = { x: e.clientX, y: e.clientY, gizmo: this.dragging || (tc?.axis ?? null) !== null };
+    this.pointerDown = {
+      x: e.clientX,
+      y: e.clientY,
+      gizmo: this.dragging || (tc?.axis ?? null) !== null || this.otherGizmoEngaged,
+    };
   };
 
   private readonly onPointerUp = (e: PointerEvent): void => {
@@ -929,6 +1362,86 @@ export class PathEditor {
     this.insertWaypointAtScreen(e.clientX, e.clientY);
   };
 
+  /** Yaw is measured around the path's up axis, which the 2D plane can change. */
+  private yawOrienter(dimension: PathDimension): Orienter {
+    let orienter = this.yawOrienters.get(dimension);
+    if (!orienter) {
+      orienter = new Orienter({ worldUp: pathUp(this.coordinates, dimension).toArray() as [number, number, number], yawOnly: true });
+      this.yawOrienters.set(dimension, orienter);
+    }
+    return orienter;
+  }
+
+  /** A press on a host gizmo is the host's, not a click into empty space. */
+  private get otherGizmoEngaged(): boolean {
+    return this.otherControls.some((controls) => controls.axis !== null || controls.dragging === true);
+  }
+
+  private isInViewport(target: EventTarget | null): boolean {
+    return target instanceof Node && this.domElement.contains(target);
+  }
+
+  /**
+   * Keeps the orbit pivot on the surface under the pointer, at the same depth
+   * along the view axis, so the view never jumps while zoom and pan keep
+   * usable steps. Runs before the camera controls handle the same event.
+   */
+  private readonly movePivot = (e: PointerEvent | WheelEvent): void => {
+    const controls = this.cameraControls;
+    const pivot = this.pivot;
+    if (!pivot || !controls?.target || controls.enabled === false || !this.isInViewport(e.target)) return;
+    this.camera.updateMatrixWorld();
+    this.camera.getWorldPosition(_camera);
+    this.camera.getWorldDirection(_forward);
+    this.setRayFromScreen(e.clientX, e.clientY);
+    const targets = typeof pivot.objects === 'function' ? pivot.objects() : pivot.objects ?? this.scene.children;
+    _hits.length = 0;
+    this.raycaster.intersectObjects(targets, true, _hits);
+    const hit = _hits.find((candidate) => !isEditorObject(candidate.object));
+    _hits.length = 0;
+    const depth = hit ? _v.subVectors(hit.point, _camera).dot(_forward) : _camera.distanceTo(controls.target);
+    controls.target.copy(_camera).addScaledVector(_forward, Math.max(depth, pivot.minDistance ?? 1));
+  };
+
+  /** Ends a TransformControls drag that is in progress, without its event. */
+  private stopGizmoDrag(): void {
+    const tc = this.transformControls as (TransformControlsLike & { dragging: boolean }) | null;
+    if (!tc?.dragging) return;
+    tc.axis = null;
+    tc.dragging = false;
+  }
+
+  /**
+   * Camera controls cannot orbit a camera a rig drives, so the camera is moved
+   * into the scene for the session, keeping its world pose.
+   */
+  private takeCameraOutOfRig(): void {
+    const camera = this.camera;
+    const parent = camera.parent;
+    if (!parent || parent === this.scene) return;
+    this.scene.updateWorldMatrix(true, false);
+    camera.updateWorldMatrix(true, false);
+    _matrix.copy(this.scene.matrixWorld).invert().multiply(camera.matrixWorld);
+    this.detachedCamera = { parent, camera };
+    this.scene.add(camera);
+    _matrix.decompose(camera.position, camera.quaternion, camera.scale);
+    camera.updateMatrixWorld();
+  }
+
+  private putCameraBackInRig(): void {
+    const { parent, camera } = this.detachedCamera!;
+    this.detachedCamera = null;
+    parent.add(camera);
+    camera.updateMatrixWorld();
+  }
+
+  /** Hides and blocks everything but the viewport and the editor's own UI. */
+  private setUiIsolated(isolated: boolean): void {
+    if (typeof document === 'undefined') return;
+    if (isolated) injectIsolationStyle();
+    document.documentElement.classList.toggle(ISOLATED_CLASS, isolated);
+  }
+
   private ensureTransformControls(): TransformControlsLike {
     if (this.transformControls) return this.transformControls;
     const tc = new TransformControls(this.camera, this.domElement) as TransformControlsLike;
@@ -949,10 +1462,7 @@ export class PathEditor {
     if (this.dragging) return;
     this.dragging = true;
     this.history.begin(); // the whole drag is one undo step
-    if (this.cameraControls) {
-      this.cameraControlsWereEnabled = this.cameraControls.enabled;
-      this.cameraControls.enabled = false;
-    }
+    this.releaseDragCamera = this.suspendCameraControls();
     const { waypointIndex } = this.selection;
     const path = this.selectedPath;
     if (path && waypointIndex !== null) this.events.emit('dragstart', { path, waypointIndex });
@@ -962,7 +1472,8 @@ export class PathEditor {
     if (!this.dragging) return;
     this.dragging = false;
     this.history.end();
-    if (this.cameraControls) this.cameraControls.enabled = this.cameraControlsWereEnabled;
+    this.releaseDragCamera?.();
+    this.releaseDragCamera = null;
     const { waypointIndex } = this.selection;
     const path = this.selectedPath;
     if (path && waypointIndex !== null) this.events.emit('dragend', { path, waypointIndex });
@@ -972,6 +1483,12 @@ export class PathEditor {
     const path = this.selectedPath;
     const { waypointIndex, handle } = this.selection;
     if (!path || waypointIndex === null) return;
+    if (this._gizmoMode === 'rotate') {
+      const radians = this.yawOrienter(path.dimension).yawOf(this.gizmoProxy.quaternion);
+      path.setWaypointProperties(waypointIndex, { yaw: roundAngle((radians * 180) / Math.PI) });
+      this.syncGizmoPosition();
+      return;
+    }
     const p = this.coordinates.toPath(this.gizmoProxy.position.toArray(), path.dimension);
     if (!handle) {
       const constrained = this.constrained(path, waypointIndex, p);
@@ -1018,17 +1535,31 @@ export class PathEditor {
     const tc = this.transformControls;
     if (!tc) return;
     const path = this.selectedPath;
-    if (!this._enabled || !this.state.view.gizmos || !path || waypointIndex === null || !this.can('moveWaypoint', path, waypointIndex)) {
+    const rotating = this._gizmoMode === 'rotate';
+    const action: EditorAction = rotating ? 'editWaypointProperties' : 'moveWaypoint';
+    const usable = rotating ? waypointIndex !== null && !handle : waypointIndex !== null;
+    if (!this._enabled || !this.state.view.gizmos || !path || !usable || !this.can(action, path, waypointIndex)) {
       tc.detach();
       return;
     }
+    tc.setMode(this._gizmoMode);
     this.syncGizmoPosition();
-    // For 2D paths only show the axes of the path plane.
-    const n = this.coordinates.planeNormal;
-    const is2D = path.dimension === 2;
-    tc.showX = !(is2D && Math.abs(n[0]) > 0.99);
-    tc.showY = !(is2D && Math.abs(n[1]) > 0.99);
-    tc.showZ = !(is2D && Math.abs(n[2]) > 0.99);
+    if (rotating) {
+      // Only the axis the yaw turns around: a free rotation would tilt the
+      // proxy, and `yaw` holds a heading, nothing else.
+      const up = pathUp(this.coordinates, path.dimension, _v);
+      const axisAligned = Math.max(Math.abs(up.x), Math.abs(up.y), Math.abs(up.z)) > 0.99;
+      tc.showX = !axisAligned || Math.abs(up.x) > 0.99;
+      tc.showY = !axisAligned || Math.abs(up.y) > 0.99;
+      tc.showZ = !axisAligned || Math.abs(up.z) > 0.99;
+    } else {
+      // For 2D paths only show the axes of the path plane.
+      const n = this.coordinates.planeNormal;
+      const is2D = path.dimension === 2;
+      tc.showX = !(is2D && Math.abs(n[0]) > 0.99);
+      tc.showY = !(is2D && Math.abs(n[1]) > 0.99);
+      tc.showZ = !(is2D && Math.abs(n[2]) > 0.99);
+    }
     if (tc.object !== this.gizmoProxy) tc.attach(this.gizmoProxy);
   }
 
@@ -1039,6 +1570,10 @@ export class PathEditor {
     if (!renderer || waypointIndex === null) return;
     if (handle) renderer.getHandleWorld(waypointIndex, handle, this.gizmoProxy.position);
     else renderer.getWaypointWorld(waypointIndex, this.gizmoProxy.position);
+    if (path && this._gizmoMode === 'rotate') {
+      const yaw = path.waypoints[waypointIndex]?.yaw ?? 0;
+      this.yawOrienter(path.dimension).yawTo((yaw * Math.PI) / 180, this.gizmoProxy.quaternion);
+    }
     this.gizmoProxy.updateMatrixWorld();
   }
 
@@ -1068,7 +1603,12 @@ export class PathEditor {
     this.helpers.visible = view.grid;
     for (const renderer of this.renderers.values()) {
       renderer.group.visible = view.paths;
-      renderer.setOptions({ showArrows: view.directions, showLabels: view.labels, showDebug: view.debug });
+      renderer.setOptions({
+        showArrows: view.directions,
+        showFacings: view.facings,
+        showLabels: view.labels,
+        showDebug: view.debug,
+      });
     }
     this.syncSelection();
   }

@@ -13,6 +13,20 @@ Run `npx path-editor doctor` first. It finds the scene, camera, renderer, loop, 
 | Paths hidden | View toggle off | `editor.setView({ paths: true })` |
 | Game renders with `camera.layers` and editor objects are invisible | Editor objects are on layer 0 | `editor.root.traverse(o => o.layers.set(N))` after paths are loaded, or enable layer 0 on the camera in dev |
 | Clicks don't select points | Another element covers the canvas (often an invisible full-screen layer), or wrong `domElement` | Read the console warning / `editor.on('inputblocked')`, which names the covering element. Make it `pointer-events: none` in the `enabled` handler, or pass an element that receives the input and covers the canvas exactly as `domElement` |
+| Camera stays dead after a gizmo drag | Two gizmos saved and restored `cameraControls.enabled` | Host gizmos must call `editor.suspendCameraControls()` and its release instead of writing the flag |
+| The move gizmo stops grabbing presses after the editor is toggled | A drag was in progress when `disable()` ran (fixed in the package) | Update the package; it now ends the drag before disabling the controls |
+| A press on a host gizmo clears the editor's selection | The editor treats anything that isn't its own marker as empty space | `otherControls: [hostGizmo]`, or `claimPointer: (e) => ...` |
+| Host gizmo and the editor's gizmo drag together | Both react to the same press | Put the host gizmo in `otherControls` and/or claim the press with `claimPointer` |
+| Game UI covers the canvas while editing | Host HUD layers | `isolateUi: true` (hides/blocks everything but the viewport and `data-path-editor-ui`) |
+| Panel stays on screen after `disable()` | Default keeps it, so its Editor button can switch back on | `new PathEditorPanel(editor, { hideWhenDisabled: true })` |
+| Camera can't be orbited / editing camera jumps back | Camera is parented into a game rig | `detachCamera: true` |
+| Zoom dies and pan crawls near the pivot | `OrbitControls` scales both by the distance to `target` | `pivotUnderPointer: true` (or `{ objects, minDistance }`) |
+| Code needs to react to a deleted point (named points, host state) | No event carried the removal | `editor.on('waypointremoved', ({ path, index, waypoint }) => ...)`, handled in the same undo step |
+| A point needs a facing, not a position | Gizmo only moves | Press `R` / `editor.setGizmoMode('rotate')`: it writes `waypoint.yaw` |
+| A single place needs a whole path | Paths were the only entity | `editor.createMarker({ id, position, yaw })` |
+| Camera path and its look-at target drift apart | Waypoint N of one path is unrelated to waypoint N of the other | Author `time` on both, pair them with `editor.addRig({ path, lookAt })`, check the sight lines and `playRig` |
+| Framing only visible after restarting the game | No preview through the scene camera | `editor.playRig(rig)` |
+| A route sinks into the floor between points | Spline overshoot | `curve.linearHeight: true`; pass `surface:` to the editor to see the spans |
 | Panel buttons don't react | Your own CSS/JS made the panel click-through (e.g. `pointer-events: none` on every sibling of the canvas) | Exclude elements with the `data-path-editor-ui` attribute |
 | Can't look around to edit (camera on a rail / attached to a player) | Game camera rig | `FlyControls` + `cameraControls: fly` + `restoreCameraOnDisable: true`, toggled from `editor.on('enabled')` |
 | Weapon/cockpit mesh flies with the free camera | It's a child of the camera | Hide camera children in the `enabled` handler |
@@ -47,6 +61,12 @@ Run `npx path-editor doctor` first. It finds the scene, camera, renderer, loop, 
 | No banking / speed changes | `applyRoll: false` / `useWaypointSpeed: false`, or values not set | Set `roll`/`speed` on waypoints (panel) and keep the defaults |
 | Speed changes feel abrupt | `interpolation: 'step'` | Use `'smooth'` (default) or `'linear'` |
 | Rotation jitters at tight corners | Instant rotation | `orientation: { smoothing: 6 }` |
+| Object teleports to the first waypoint when it picks a route up mid-scene | `startFrom` defaults to `'path'` | `startFrom: 'closest'` (snap onto the nearest point) or `'object'` (lead-in leg, `enter` event) |
+| First frame flicks the object around | Smoothing has no previous rotation to ease from | `initialRotation: 'object'`, or `follower.seedRotation(q)` |
+| `rotation.y` reads wrong once the object turns past ±90° | XYZ Euler cannot hold that yaw; the quaternion is fine | Read `follower.yaw`, write `follower.setYaw(rad)` |
+| Route sags below the floor between points | Spline overshoot where flat meets a climb | `curve.linearHeight: true` on the path |
+| Waiting for a waypoint never fires after a jump | Seeks don't emit waypoints | `setWaypoint('name', { emitWaypoints: true })`, or `hasPassed('name')` |
+| A convoy / flock needs a follower per object | One cursor per object | `follower.addRider({ object, offset, lateral })` |
 | Object is offset from the drawn path | Object's parent is transformed and `space: 'parent'` | Use the default `space: 'world'` |
 | 2D path lies on the wrong plane | Different coordinate systems in editor and follower | Pass the same `coordinates` to both |
 | Speed depends on waypoint spacing | You used `getPoint(t)` | Use `getPointAt(u)` / `PathFollower` (arc-length based) |

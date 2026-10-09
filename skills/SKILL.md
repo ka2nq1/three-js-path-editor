@@ -146,6 +146,8 @@ editor.on('previewstate', ({ preview, playing }) => {
 ```
 - `previewstate` fires once per real change: after `preview` when an attached preview starts playing (the default), and with `playing: false` when a playing preview is detached.
 - Per preview: `preview.on('play' | 'pause' | 'reset' | 'complete' | ..., fn)`, or the options `onPlay`, `onPause`, `onReset`. Listeners survive `setPath`/`previewPath`.
+Host-side integration flags worth setting from the start: `isolateUi` (hide the game UI while editing), `detachCamera` (camera lives in a rig), `pivotUnderPointer` (bare `OrbitControls`), `otherControls` / `claimPointer` (host gizmos in the same scene), and `suspendCameraControls()` instead of writing `cameraControls.enabled` from host code.
+
 - `PathFollower` has the same `play`/`pause`/`reset` events and `onPlay`/`onPause`/`onReset` options. With loop `'none'`, the end emits `complete`, then `pause`.
 
 Runtime (production):
@@ -164,6 +166,20 @@ const follower = new PathFollower({
 // in the existing loop:
 follower.update(dt);
 ```
+
+A follower starting somewhere other than the first waypoint: `startFrom: 'closest'` (nearest point on the path) or `startFrom: 'object'` (keeps the object where it stands and runs a lead-in leg onto the path, then fires `enter`). With `smoothing`, add `initialRotation: 'object'` so the first frame turns instead of snapping.
+
+Waiting for a point: the `waypoint` event carries the waypoint itself, so match on `metadata.name` — `follower.once('waypoint', fn, (e) => e.waypoint.metadata.name === 'gate')`. Jump with `setWaypoint(index | name)`, and add `{ emitWaypoints: true }` when listeners must still hear about the points skipped. `hasPassed(index | name)` is the state version of the same question.
+
+Heading: read `follower.yaw` and write `follower.setYaw(rad)`. Never `object.rotation.y` — an XYZ Euler mirrors any yaw past ±90°.
+
+Several objects on one path (convoy, flock, trailing camera): `follower.addRider({ object, offset, lateral })` instead of a follower each; riders share the leader's cursor.
+
+Routes authored on a floor: set `curve.linearHeight: true` so the spline cannot dip below the surface between points, and pass `surface: () => [map]` to the editor to see where a path still sinks.
+
+Not every point is a route: `editor.createMarker({ id, position, yaw })` is a single named place (spawn point, prop, light) — a `Path` with `kind: 'marker'`, in the same file, selection and history. Facings are authored with the rotate gizmo (`R`) into `waypoint.yaw`; read them for anything that stands still, since travel takes its heading from the curve.
+
+A camera path and what it looks at: author `time` on both and pair them with `editor.addRig({ path, lookAt })`. The editor draws sight lines between the matching points and `playRig` flies its own camera along the rig, so framing no longer needs a game restart. Delete-sensitive hosts should listen to `waypointremoved` ({ path, index, waypoint }, in the same undo step) instead of diffing after `change`.
 
 Speed changes and banking (e.g. a helicopter leaning into turns) belong in the route data: set `speed` (multiplier) and `roll` (degrees, positive = bank right) on waypoints in the editor. Don't hardcode them in game code. If a model banks the wrong way, use `orientation: { rollScale: -1 }`.
 

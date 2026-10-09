@@ -2,6 +2,7 @@ import { Emitter } from '../utils/Emitter';
 import { clamp } from '../utils/math';
 import type { Path } from './Path';
 import type { WaypointInterpolation } from './types';
+import type { Waypoint } from './Waypoint';
 
 export type LoopMode = 'none' | 'loop' | 'pingpong';
 
@@ -37,12 +38,25 @@ export interface PathCursorOptions {
 export const MIN_WAYPOINT_SPEED = 0.01;
 /** Max integration step when speed varies along the path. */
 const MAX_SUBSTEP = 1 / 60;
+const DISTANCE_EPSILON = 1e-9;
+
+/** A waypoint by index, or by its `metadata.name`. */
+export type WaypointTarget = number | string;
+
+export interface SeekOptions {
+  /**
+   * Emit `waypoint` for every waypoint the jump passed over. Off by default:
+   * a seek is a cut, not travel, so listeners waiting for a point would
+   * otherwise never hear about it.
+   */
+  emitWaypoints?: boolean;
+}
 
 export interface PathCursorEvents {
   /** After every `advance()` that moved the cursor. */
   progress: { progress: number; distance: number };
   /** The cursor reached (or passed) a waypoint. */
-  waypoint: { index: number };
+  waypoint: { index: number; waypoint: Waypoint; distance: number };
   /** Looped back to start ('loop') or turned around ('pingpong'). */
   loop: { count: number; direction: 1 | -1 };
   /** Reached the end with loop mode 'none'. Followed by `pause`. */
@@ -147,6 +161,61 @@ export class PathCursor {
     this.events.emit('reset', undefined);
   }
 
+  /**
+   * Jumps to a distance along the path. With `emitWaypoints` the waypoints
+   * between the old and the new position are emitted, in travel order.
+   */
+  seek(distance: number, options: SeekOptions = {}): this {
+    const from = this._distance;
+    this.distance = distance;
+    if (options.emitWaypoints) this.emitCrossings(from, this._distance);
+    return this;
+  }
+
+  /** Jumps to normalized progress [0, 1]. See `seek`. */
+  seekProgress(progress: number, options?: SeekOptions): this {
+    return this.seek(clamp(progress, 0, 1) * this.path.length, options);
+  }
+
+  /**
+   * Jumps to an authored time on the path (see `Waypoint.time`). Returns false
+   * (and does nothing) when the path has no timeline. See `seek`.
+   */
+  seekTime(time: number, options?: SeekOptions): boolean {
+    if (!this.path.timeRange) return false;
+    this.seek(this.path.distanceAtTime(time), options);
+    return true;
+  }
+
+  /** The authored time the cursor currently sits at, or 0 without a timeline. */
+  get time(): number {
+    return this.path.timeAtDistance(this.distance);
+  }
+
+  /**
+   * Jumps to a waypoint, by index or `metadata.name`. Returns false (and does
+   * nothing) when the path has no such waypoint. See `seek`.
+   */
+  seekWaypoint(target: WaypointTarget, options?: SeekOptions): boolean {
+    const distance = this.path.distanceOfWaypoint(target);
+    if (distance === undefined) return false;
+    this.seek(distance, options);
+    return true;
+  }
+
+  /**
+   * True when the cursor sits at or beyond a waypoint in its current travel
+   * direction. It describes the current position, not history: a loop or a
+   * backward seek makes it false again.
+   */
+  hasPassed(target: WaypointTarget): boolean {
+    const distance = this.path.distanceOfWaypoint(target);
+    if (distance === undefined) return false;
+    return this.direction > 0
+      ? this.distance >= distance - DISTANCE_EPSILON
+      : this.distance <= distance + DISTANCE_EPSILON;
+  }
+
   /** Switches path while keeping normalized progress. */
   setPath(path: Path): void {
     const progress = this.progress;
@@ -233,19 +302,25 @@ export class PathCursor {
   /** Emits 'waypoint' for waypoints in (from, to] (forward) or [to, from) (backward). */
   private emitCrossings(from: number, to: number): void {
     const distances = this.path.getWaypointDistances();
-    const eps = 1e-9;
-    const order = distances.map((d, i) => ({ d, i }));
-    if (to < from) order.reverse();
-    for (const { d, i } of order) {
-      const crossed = to >= from ? d > from + eps && d <= to + eps : d < from - eps && d >= to - eps;
-      if (crossed) this.events.emit('waypoint', { index: i });
+    const eps = DISTANCE_EPSILON;
+    const forward = to >= from;
+    const n = distances.length;
+    for (let k = 0; k < n; k++) {
+      const i = forward ? k : n - 1 - k;
+      const d = distances[i];
+      const crossed = forward ? d > from + eps && d <= to + eps : d < from - eps && d >= to - eps;
+      if (crossed) this.emitWaypoint(i, d);
     }
   }
 
   private emitAt(position: number): void {
     const distances = this.path.getWaypointDistances();
-    distances.forEach((d, i) => {
-      if (Math.abs(d - position) < 1e-9) this.events.emit('waypoint', { index: i });
-    });
+    for (let i = 0; i < distances.length; i++) {
+      if (Math.abs(distances[i] - position) < DISTANCE_EPSILON) this.emitWaypoint(i, distances[i]);
+    }
+  }
+
+  private emitWaypoint(index: number, distance: number): void {
+    this.events.emit('waypoint', { index, waypoint: this.path.waypoints[index], distance });
   }
 }

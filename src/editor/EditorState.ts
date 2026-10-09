@@ -10,6 +10,12 @@ export interface EditorViewOptions {
   directions: boolean;
   /** Waypoint index / path name labels. */
   labels: boolean;
+  /** Facing arrows on waypoints that carry a `yaw`. */
+  facings: boolean;
+  /** Sight lines of camera rigs (camera path ↔ what it looks at). */
+  sightlines: boolean;
+  /** Warning ticks where a path runs below the surface it was authored on. */
+  surface: boolean;
   /** Editor grid + axes helpers. */
   grid: boolean;
   /** Control polygon and other debug helpers. */
@@ -21,6 +27,9 @@ export const DEFAULT_VIEW: EditorViewOptions = {
   paths: true,
   directions: true,
   labels: false,
+  facings: true,
+  sightlines: true,
+  surface: true,
   grid: false,
   debug: false,
 };

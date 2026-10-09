@@ -25,6 +25,9 @@ A reusable, framework-agnostic **path editor and path follower for existing Thre
 - [Creating a path](#creating-a-path)
 - [Editing a path](#editing-a-path)
 - [Path JSON format](#path-json-format)
+- [Markers](#markers-a-single-named-place)
+- [Facings](#facings-a-heading-per-waypoint)
+- [Authored times and camera rigs](#authored-times-and-camera-rigs)
 - [PathFollower](#pathfollower)
 - [Preview objects](#preview-objects)
 - [2D paths](#2d-paths) · [3D paths](#3d-paths)
@@ -136,6 +139,14 @@ Two ways to fix it:
 
 Give your own dev UI the `data-path-editor-ui` attribute so it is not reported. The panel already has it. Turn the console message off with `diagnostics: false`.
 
+Or let the editor take the screen for the session:
+
+```ts
+new PathEditor({ ..., isolateUi: true });
+```
+
+`isolateUi` hides and blocks every element on the page except the viewport (`domElement`, marked `data-path-editor-viewport` while enabled) and anything marked `data-path-editor-ui`. It uses `visibility`, not `display`, so the game's layout keeps its size and comes back untouched on `disable()`.
+
 ### Pausing the game and muting its input
 
 Use the `enabled` event. It fires on every `enable()` / `disable()`, and is the place for project-specific behavior: freeze time, hide the HUD, stop the game from shooting on clicks.
@@ -154,6 +165,47 @@ editor.on('enabled', (on) => {
 
 The editor itself only uses `pointer*`, `click`, `dblclick` and `keydown` events, so blocking `mouse*` / `touch*` like this doesn't affect it. Which events to block depends on your game.
 
+### Your own gizmos and controls in the same scene
+
+The editor's pointer handler sits on `window` in the capture phase, so it can claim a press before `TransformControls` or the camera controls see it. Three hooks keep a host gizmo and the editor out of each other's way:
+
+```ts
+new PathEditor({
+  ...,
+  otherControls: [myYawGizmo],            // anything with an `axis`
+  claimPointer: (e) => myWidget.hitTest(e),
+});
+editor.gizmoEngaged; // true while any gizmo owns the pointer
+editor.gizmo;        // the editor's own gizmo (`axis`, `dragging`), read-only use
+```
+
+- `otherControls` — while one of them reports an `axis` (or `dragging`), the editor leaves the press alone: it neither selects nor clears the selection, so clicking your gizmo no longer deselects the point it belongs to.
+- `claimPointer` — called first for every press in the viewport. Return true and the editor ignores that press entirely and lets it through to you.
+
+Camera controls have **one** owner: the editor. A gizmo of your own must not write `cameraControls.enabled` — two gizmos doing that on one press leave the camera switched off forever. Ask the editor instead:
+
+```ts
+const release = editor.suspendCameraControls(); // counted; nest as deep as you like
+release();                                      // the last release restores what the controls had
+```
+
+### A camera the game drives
+
+`restoreCameraOnDisable` puts the camera back where the game had it. A camera parented into a rig also has to leave that rig to be orbited at all — `detachCamera: true` moves it into the scene for the session, keeping its world pose, and puts it back on `disable()` (it implies `restoreCameraOnDisable`).
+
+Bare `OrbitControls` scale zoom and pan by the distance to `target`, so both stall as you approach a fixed pivot. `pivotUnderPointer` keeps the pivot on the surface under the pointer, at that depth along the view axis so the view never jumps:
+
+```ts
+new PathEditor({
+  ...,
+  cameraControls: orbit,
+  detachCamera: true,
+  pivotUnderPointer: { objects: () => [map], minDistance: 1.5 },
+});
+```
+
+`objects` defaults to the whole scene minus the editor's own objects, and the pivot moves on pointer presses and wheel events, before the controls handle them.
+
 ### A free camera for editing
 
 If the game camera is attached to a player, vehicle or rail, you can't look around to edit. `FlyControls` is a small free-fly camera you drive yourself: WASD to move, E/Q or Space/C for up/down, right-drag or arrow keys to look, wheel to change speed, Shift to boost. It ignores keys typed into inputs and keys pressed with Cmd/Ctrl, so shortcuts keep working.
@@ -171,7 +223,7 @@ editor.update(dt);
 
 - Passing it as `cameraControls` pauses look-dragging while a gizmo is dragged.
 - `restoreCameraOnDisable` puts the camera back where the game had it when you stop editing.
-- The camera moves in its parent's space. If your rig parents the camera to a moving object, move it to the scene while flying, or have your `enabled` handler stop the rig from driving it.
+- The camera moves in its parent's space. If your rig parents the camera to a moving object, use `detachCamera: true` (see above) or have your `enabled` handler stop the rig from driving it.
 - Objects attached to the camera (a weapon, a cockpit) fly along with it. Hide them in the `enabled` handler if they get in the way.
 
 ### Saving straight into the project (Vite)
@@ -252,6 +304,20 @@ If your runtime uses `THREE.CatmullRomCurve3` with `'centripetal'` or `'chordal'
 
 The default `'uniform'` with `tension` 0.5 is three's `'catmullrom'`. The panel exposes this as **Spacing**.
 
+### Routes authored on a surface: `linearHeight`
+
+A spline through points on a floor overshoots in height where a flat stretch
+runs into a climb, so the curve dips below the floor the points sit on (half a
+metre at a stair flight is normal). `linearHeight` interpolates height linearly
+between waypoints while x/z keep following the curve, so a segment can never
+leave the span between the heights of its two waypoints:
+
+```json
+"curve": { "type": "catmull-rom", "parametrization": "centripetal", "linearHeight": true }
+```
+
+3D paths with a curved type only; it is ignored for 2D and `'linear'` paths.
+
 ### TypeScript with `moduleResolution: "node"`
 
 Older templates still use `"moduleResolution": "node"`, which ignores the `exports` map. The package also ships `typesVersions`, so `three-path-editor/editor`, `/core` and `/vite` resolve their types there too.
@@ -295,14 +361,17 @@ path.events.on('change', () => console.log('changed', path.length));
 | Add waypoint | **Shift+click** empty space (placed via `editor.placement`) / `+` | `editor.addWaypoint()` / `editor.addWaypointAtScreen(x, y)` |
 | Insert waypoint on the curve | **Shift+click** or **double-click** the path line | `editor.insertWaypointAt(pathId, t)` / `editor.insertWaypointAtScreen(x, y)` |
 | Speed / roll of a waypoint | panel: *Speed ×*, *Roll °* | `path.setWaypointProperties(i, { speed, roll })` |
+| Facing / time of a waypoint | panel: *Yaw °*, *Time*, or the rotate gizmo (`R`) | `path.setWaypointProperties(i, { yaw, time })` |
+| New marker (a single named place) | panel: **+ Marker** | `editor.createMarker({ id, position, yaw })` |
 | Delete whole path | panel: **Delete path** (asks for confirmation) | `editor.deleteSelectedPath()` / `editor.removePath(id)` |
 | Delete waypoint | `Delete` / `Backspace` | `editor.deleteSelectedWaypoint()` |
 | Reorder waypoint | `Alt+[` / `Alt+]` | `editor.reorderWaypoint(pathId, from, to)` |
 | Prev / next waypoint | `[` / `]` | `editor.selectAdjacentWaypoint(±1)` |
 | Deselect | `Escape`, click empty space | `editor.clearWaypointSelection()` |
 | Toggle gizmos | `G` | `editor.toggleView('gizmos')` |
+| Gizmo: move / turn the point | `R` | `editor.toggleGizmoMode()` / `setGizmoMode('rotate')` |
 | Undo / redo | **Cmd/Ctrl+Z** / **Cmd/Ctrl+Shift+Z** (or Ctrl+Y), panel ↶ ↷ | `editor.undo()` / `editor.redo()` |
-| Toggle path / arrows / labels / grid / debug | panel | `editor.setView({ paths, directions, labels, grid, debug })` |
+| Toggle path / arrows / labels / facings / sight lines / below-floor / grid / debug | panel | `editor.setView({ paths, directions, labels, facings, sightlines, surface, grid, debug })` |
 | Bezier handles | select a point on a Bezier path, then click and drag a handle | `path.setWaypointHandles(i, { handleIn, handleOut })` |
 
 Inserting on the curve keeps the shape: exact for Bezier (de Casteljau split), and for other curve types the new point lies on the old curve. The new point's speed and roll are interpolated from its neighbours.
@@ -348,6 +417,8 @@ The `PathEditorPanel` is optional. It's plain DOM with no dependencies, and give
 
 - `dimension: 2` paths store `[x, y]` positions.
 - Optional per-point `speed` (multiplier, default 1) and `roll` (bank in degrees, default 0, positive = bank right). See [Speed and bank per waypoint](#speed-and-bank-per-waypoint).
+- Optional per-point `yaw` (facing in degrees for something standing there) and `time` (authored time in your own units). See [Facings](#facings-a-heading-per-waypoint) and [Authored times](#authored-times-and-camera-rigs).
+- `kind: "marker"` marks a path that is one named place rather than a route. See [Markers](#markers-a-single-named-place).
 - `curve.type`: `linear`, `catmull-rom` or `bezier`. Bezier points may have `handleIn` / `handleOut` offsets (relative to the point). Missing handles are generated automatically, and an unedited Bezier path matches the Catmull-Rom path exactly.
 - `metadata` (paths and points) and **any unknown key** at file, path or point level is preserved on import → export.
 - Files with a newer `version` are rejected with a clear `PathFormatError`, so old game builds never silently misread new files.
@@ -360,6 +431,64 @@ editor.import(json, { merge: true });
 ```
 
 See [skills/routes.md](skills/routes.md) for the full field reference and authoring workflow.
+
+## Markers: a single named place
+
+A spawn point, a prop, a light — something an object just stands on, with no route to travel. `editor.createMarker()` (panel: **+ Marker**) makes a path with `kind: 'marker'`: one waypoint, no curve settings, and the editor refuses to add more points to it.
+
+```ts
+const spawn = editor.createMarker({ id: 'guard-spawn', position: [12, 0, -4], yaw: 90 });
+editor.markers;   // markers only
+editor.routes;    // everything that is not a marker
+editor.paths;     // both — markers live in the same file, selection, history and JSON
+```
+
+A marker is a `Path`, so it is selected, moved, turned, undone and saved exactly like a route, and the game reads it the same way: `getPathFromFile(routes, 'guard-spawn').waypoints[0]`.
+
+## Facings: a heading per waypoint
+
+Routes answer "where", not "which way is it facing" — a guard standing on a point, a prop, a turret. Press `R` (or `editor.setGizmoMode('rotate')`) and the gizmo turns the selected point instead of moving it, writing `yaw` in degrees around the path's up axis. Points that carry one show a facing arrow (view toggle **Facings**).
+
+```ts
+path.setWaypointProperties(0, { yaw: -135 });   // or the panel's Yaw ° field
+const heading = path.waypoints[0].yaw;          // degrees, undefined when not authored
+```
+
+Travel ignores `yaw`: a follower takes its heading from the curve. It is there for whatever stands still. To put an object on it at runtime, use `PathFollower.setYaw((yaw * Math.PI) / 180)` or build the rotation with `Orienter.yawTo`.
+
+## Authored times and camera rigs
+
+Two paths cannot be kept in step by waypoint index: point N of a camera path has nothing to do with point N of what it looks at. Author `time` on the points instead (panel: *Time*, any unit you like), and both paths can be sampled at the same time:
+
+```ts
+camera.getPointAtTime(2.5);      // interpolated between the timed waypoints
+camera.distanceAtTime(2.5);      // and back: timeAtDistance(d)
+camera.timeRange;                // { start, end } or null
+camera.duration;
+follower.setTime(2.5);           // seek a follower by authored time
+```
+
+A **camera rig** pairs the two paths:
+
+```ts
+const rig = editor.addRig({ path: 'phase1-camera', lookAt: 'phase1-camera-target', duration: 6 });
+editor.playRig(rig);   // flies the editor's camera along it, looking at the matching point
+editor.stopRig();      // and puts the camera back
+```
+
+- Sight lines between the matching points are drawn in the view (toggle **Sight lines**), so the framing is visible while editing instead of only after restarting the game.
+- The rig samples by authored `time` when both paths carry one, by normalized arc length otherwise.
+- The flight suspends the host's camera controls, restores the camera pose when it ends or is stopped, and reports `rigstate: { rig, playing }`. The panel shows a **Fly** button when rigs exist.
+
+## Warning where a path sinks into the floor
+
+Pass the floors and the editor ticks every span of a curve that runs below them (view toggle **Below floor**) — the sag a spline makes where a flat stretch meets a climb, which `curve.linearHeight` removes:
+
+```ts
+new PathEditor({ ..., surface: () => [map] });
+new PathEditor({ ..., surface: { objects: [map], tolerance: 0.05 } });
+editor.surfaceWarnings;   // the SurfaceCheck, to restyle or re-check
+```
 
 ## PathFollower
 
@@ -378,7 +507,9 @@ const follower = new PathFollower({
     smoothing: 6,         // 0 = snap; higher = faster convergence
     offset: [0, 0, 0],    // extra model-space rotation (radians)
   },
-  onWaypoint: ({ index }) => {},
+  startFrom: 'path',      // 'path' (default) | 'closest' | 'object' (lead-in leg)
+  initialRotation: 'path', // 'path' (default) | 'object' (ease from where it faces now)
+  onWaypoint: ({ index, waypoint, distance }) => {},
   onLoop: ({ count, direction }) => {},
   onComplete: () => {},
   onPlay: () => {},       // playback started
@@ -391,6 +522,10 @@ follower.update(dt);
 
 follower.pause(); follower.play(); follower.reset();
 follower.setProgress(0.5);
+follower.setWaypoint('gate');                          // by index or metadata.name
+follower.setWaypoint('gate', { emitWaypoints: true }); // let listeners hear the skipped points
+follower.hasPassed('gate');
+follower.once('waypoint', run, (e) => e.waypoint.metadata.name === 'gate');
 follower.speed = 20;
 follower.speedModifier = ({ progress }) => (progress > 0.9 ? 0.4 : 1); // slow down at the end
 ```
@@ -403,7 +538,36 @@ follower.speedModifier = ({ progress }) => (progress > 0.9 ? 0.4 : 1); // slow d
 - Events (`follower.on(type, fn)` returns an unsubscribe function; same on `PathCursor.events`):
   - `progress`, `waypoint`, `loop` and `complete` come from `update()`.
   - `play` and `pause` fire only when `isPlaying` actually changes, so a second `play()` emits nothing. Reaching the end with loop `'none'` emits `complete` and then `pause`, and `isPlaying` is already `false` inside both. `autoPlay` at construction doesn't emit `play`.
-  - `reset` fires on every `reset()`, which keeps the play state. `play()` on a completed follower restarts it: `reset`, then `play`. Seeks (`setProgress`, `setDistance`, `setPath`) emit nothing.
+  - `reset` fires on every `reset()`, which keeps the play state. `play()` on a completed follower restarts it: `reset`, then `play`. Seeks (`setProgress`, `setDistance`, `setWaypoint`, `setPath`) emit nothing — a seek is a cut, not travel. Pass `{ emitWaypoints: true }` to a seek and the waypoints it passed over are emitted in travel order, so code waiting for a point isn't left hanging.
+  - `waypoint` carries the `waypoint` itself and its `distance`, so a listener can match on `metadata.name` without resolving indices. `once(type, fn, filter?)` unsubscribes after the first event the filter accepts, and `hasPassed(index | name)` answers whether a point is already behind the cursor in the current travel direction.
+  - `enter` is the follower's own event: the lead-in leg of `startFrom: 'object'` reached the path.
+- Sampling allocates nothing: `getPointAtDistance(d, out)` and every other evaluator write into a vector you own, and the follower reuses its own.
+
+### Starting somewhere other than the first waypoint
+
+`startFrom` decides where a follower begins:
+
+- `'path'` (default) — at `startProgress`.
+- `'closest'` — at the point on the path nearest the object's current position. For a route picked up mid-scene, so nothing teleports.
+- `'object'` — the object stays where it stands and runs a straight lead-in leg onto the path at the speed the path opens with, facing along it; `enter` fires on arrival and `isEntering` is true until then. Travel along the path then starts at `startProgress`.
+
+With `smoothing`, the first frame normally snaps onto the path's heading, because the follower has no previous rotation to ease from. `initialRotation: 'object'` eases from the rotation the object already has; `follower.seedRotation(q)` does the same at any time.
+
+### Heading: read `follower.yaw`, not `rotation.y`
+
+The follower writes rotations as quaternions. An XYZ Euler cannot hold a yaw past ±90°, so `object.rotation.y` comes back mirrored with `x`/`z` flipped by 180° — and code that then writes `rotation.y` silently breaks the heading. `follower.yaw` (radians around the orientation's world up) and `follower.setYaw(yaw)` are exact in both directions, and `setYaw` also seeds the smoothing, so a scripted turn eases on from it. `Orienter.yawOf(q)` / `yawTo(yaw, q)` do the same without a follower.
+
+### Several objects on one path: riders
+
+A convoy, a flock or a camera trailing a vehicle doesn't need a follower each. Riders share the leader's cursor, so speed, loops and events are integrated once:
+
+```ts
+const car = follower.addRider({ object: trailer, offset: 6 });          // 6 units behind
+const wing = follower.addRider({ object: bird, offset: 3, lateral: [2, 1] }); // right 2, up 1
+follower.removeRider(wing);
+```
+
+`offset` is measured along the path against the direction of travel (negative = ahead), clamped at the ends of an open path and wrapped on a looping one. `lateral` is `[right, up]` in world units, in the frame of the rider's own position. A rider takes the leader's orientation settings unless given its own (`orientation: false` only moves it).
 
 ### Speed and bank per waypoint
 
@@ -553,12 +717,27 @@ The CLI never overwrites or deletes files.
 | --- | --- |
 | Nothing visible | `editor.enable()` and call `editor.update(dt)` every frame, with the scene/camera you actually render |
 | Camera orbits while dragging | pass `cameraControls` |
+| Camera stays dead after a drag | a host gizmo wrote `cameraControls.enabled`; use `editor.suspendCameraControls()` |
+| Gizmo stops grabbing presses after toggling the editor | fixed: `disable()` now ends a drag in progress |
+| Clicking a host gizmo clears the selection | `otherControls: [hostGizmo]` or `claimPointer` |
+| Game UI covers the canvas while editing | `isolateUi: true` |
+| Panel stays on screen when the editor is off | `new PathEditorPanel(editor, { hideWhenDisabled: true })` |
+| Camera can't be orbited (it sits in a rig) | `detachCamera: true` |
+| Zoom and pan stall near the pivot | `pivotUnderPointer: true` |
 | Clicks don't select | something covers the canvas: check the console warning / `inputblocked`, see [overlays](#html-overlays-covering-the-canvas) |
 | Game shoots / reacts while editing | mute its input in `editor.on('enabled', ...)`, see [game input](#pausing-the-game-and-muting-its-input) |
 | Can't look around, camera is on a rail | `FlyControls`, see [free camera](#a-free-camera-for-editing) |
 | Edited curve differs from the game's | match `curve.parametrization` (e.g. `'centripetal'`) |
 | Model faces the wrong way | set `orientation.forward` (e.g. `[1,0,0]`, `[0,0,-1]`) |
 | Car pitches on hills | `orientation.yawOnly: true` |
+| Route dips below the floor between points | `curve.linearHeight: true`, and `surface:` to see where |
+| Need a facing, not a route | the rotate gizmo (`R`) writes the waypoint's `yaw` |
+| Need a single point, not a path | `editor.createMarker()` |
+| Camera path and its target drift apart | author `time` on both and pair them with `addRig` |
+| Object teleports to the first waypoint | `startFrom: 'closest'` or `'object'` |
+| First frame snaps the object's heading around | `initialRotation: 'object'` (or `seedRotation`) |
+| `rotation.y` is wrong past ±90° | read `follower.yaw`, write `follower.setYaw()` |
+| A convoy or flock needs one follower each | `follower.addRider({ object, offset, lateral })` |
 | Editor in production bundle | dynamic import behind a dev guard |
 
 Full list: [skills/troubleshooting.md](skills/troubleshooting.md).
@@ -569,30 +748,37 @@ Full list: [skills/troubleshooting.md](skills/troubleshooting.md).
 
 - `Path`: `waypoints`, `curve`, `dimension`, `metadata`, `length`, `version`, `events`
   - edit: `addWaypoint`, `removeWaypoint`, `moveWaypoint`, `reorderWaypoint`, `setWaypointHandles`, `setWaypointProperties`, `setMetadata`, `setWaypointMetadata`, `setCurve`, `reverse`, `markChanged`
-  - sample: `getPointAt(u)`, `getTangentAt(u)`, `getPointAtDistance(d)`, `getTangentAtDistance(d)`, `getPoint(t)`, `sample(n)`, `getSpacedPoints(n)`, `getWaypointDistances()`, `getBezierHandles(i)`, `getWaypointValueAtDistance(key, d)`, `getClosestPoint(p)`
+  - sample (every evaluator takes an optional `out` vector and writes into it): `getPointAt(u, out?)`, `getTangentAt(u, out?)`, `getPointAtDistance(d, out?)`, `getTangentAtDistance(d, out?)`, `getPoint(t, out?)`, `sample(n)`, `getSpacedPoints(n)`, `getWaypointDistances()`, `getBezierHandles(i)`, `getWaypointValueAtDistance(key, d)`, `getClosestPoint(p)`
+  - look up: `indexOfWaypoint(name | predicate)`, `distanceOfWaypoint(index | name)`
+  - authored time: `timeRange`, `duration`, `distanceAtTime(t)`, `timeAtDistance(d)`, `getPointAtTime(t, out?)`, `getTangentAtTime(t, out?)`
+  - `kind` / `isMarker`: a single named place instead of a route
   - `toJSON()`, `Path.fromJSON()`, `clone()`
-- `Waypoint`: `position`, `handleIn`, `handleOut`, `speed?`, `roll?`, `metadata`, `id?`
-- `PathCursor`: engine-agnostic progress, speed, loop and events (`progress`, `waypoint`, `loop`, `complete`, `play`, `pause`, `reset`)
+- `Waypoint`: `position`, `handleIn`, `handleOut`, `speed?`, `roll?`, `yaw?`, `time?`, `metadata`, `id?`
+- `PathCursor`: engine-agnostic progress, speed, loop and events (`progress`, `waypoint`, `loop`, `complete`, `play`, `pause`, `reset`), plus `seek(d, opts)`, `seekProgress(u, opts)`, `seekWaypoint(index | name, opts)`, `hasPassed(index | name)`
 - `parsePathFile`, `readPathFile`, `getPathFromFile`, `serializePaths`, `stringifyPaths`, `PathFormatError`, `PATH_FORMAT_VERSION`
 - `createCoordinateSystem`, `defaultCoordinateSystem`, `CoordinateSystem`
-- Curves: `LinearCurve`, `CatmullRomCurve`, `BezierCurve`, `createCurve`, `ArcLengthTable`
+- Curves: `LinearCurve`, `CatmullRomCurve`, `BezierCurve`, `LinearHeightCurve`, `createCurve`, `ArcLengthTable`
 
 **Runtime** (`three-path-editor`)
 
-- `PathFollower`: `update`, `apply`, `play`, `pause`, `reset`, `setProgress`, `setDistance`, `setPath`, `on`, `speed`, `currentSpeed`, `currentRoll`, `loop`, `progress`, `distance`, `direction`, `isPlaying`, `isComplete`, `dispose`
-- `Orienter` / `OrientationOptions`
+- `PathFollower`: `update`, `apply`, `play`, `pause`, `reset`, `setProgress`, `setDistance`, `setWaypoint`, `setPath`, `hasPassed`, `on`, `once`, `yaw`, `setYaw`, `seedRotation`, `addRider`, `removeRider`, `riders`, `isEntering`, `speed`, `currentSpeed`, `currentRoll`, `loop`, `progress`, `distance`, `direction`, `isPlaying`, `isComplete`, `dispose`
+- `FollowerRider` / `RiderOptions`: an object carried along the leader's path at an offset
+- `Orienter` / `OrientationOptions`: `compute`, `yawOf`, `yawTo`, `worldUp`
 
 **Editor** (`three-path-editor/editor`)
 
 - `PathEditor`: `enable`, `disable`, `toggle`, `dispose`, `update`, `setCamera`, `createPath`, `createPathInView`, `loadPath`, `removePath`, `deleteSelectedPath`, `renamePath`, `import`, `export`, `exportString`, `select`, `clearSelection`, `addWaypoint`, `addWaypointAtScreen`, `insertWaypointAt`, `insertWaypointAtScreen`, `deleteSelectedWaypoint`, `removeWaypoint`, `moveWaypoint`, `reorderWaypoint`, `shiftSelectedWaypoint`, `undo`, `redo`, `canUndo`, `canRedo`, `history`, `setView`, `toggleView`, `attachPreview`, `previewPath`, `detachPreview`, `pick`, `setRayFromScreen`, `getViewCenter`, `can`, `applyConstraints`, `saveSession`, `restoreSession`, `on`, `root`, `state`, `placement`, `constrainWaypoint`
-  - options beyond the basics: `diagnostics`, `restoreCameraOnDisable`, `canEdit`, `constrainWaypoint`
-  - events: `change`, `select`, `view`, `pathadded`, `pathremoved`, `import`, `dragstart`, `dragend`, `enabled`, `preview`, `history`, `inputblocked`, `denied`
-- `PathEditorPanel`: optional DOM UI (`onSave`, `onExport`, `formatWaypoint`, ...)
+  - also: `suspendCameraControls`, `gizmoEngaged`, `gizmo`, `gizmoMode`, `setGizmoMode`, `toggleGizmoMode`, `createMarker`, `markers`, `routes`, `addRig`, `removeRig`, `rigs`, `getRig`, `playRig`, `stopRig`, `flyingRig`, `surfaceWarnings`, `otherControls`, `claimPointer`
+  - options beyond the basics: `diagnostics`, `restoreCameraOnDisable`, `detachCamera`, `isolateUi`, `pivotUnderPointer`, `otherControls`, `claimPointer`, `gizmoMode`, `rigs`, `surface`, `canEdit`, `constrainWaypoint`
+  - events: `change`, `select`, `view`, `pathadded`, `pathremoved`, `import`, `dragstart`, `dragend`, `enabled`, `preview`, `previewstate`, `history`, `inputblocked`, `denied`, `waypointremoved`, `gizmomode`, `rigstate`
+- `PathEditorPanel`: optional DOM UI (`onSave`, `onExport`, `formatWaypoint`, `hideWhenDisabled`, `setVisible`, ...)
 - `FlyControls`: optional free-fly camera (`enabled`, `update`, `speed`, `keys`, `dispose`)
 - `saveToDevServer(json, { endpoint })`
 - `PathPreview`: `play`, `pause`, `toggle`, `reset`, `setProgress`, `setPath`, `detach`
+- `CameraRig`: a camera path paired with what it looks at (`sample`, `lines`, `timed`, `flightTime`)
+- `SurfaceCheck`: ticks the spans of a path that run below a surface (`lines`, `update`)
 - `ThreePathRenderer`: renders a single path (usable without the editor for debug views)
-- `planePlacement`, `objectPlacement`, `PlacementProvider`, `surfaceConstraint`, `WaypointConstraint`
+- `planePlacement`, `objectPlacement`, `PlacementProvider`, `surfaceConstraint`, `WaypointConstraint`, `isEditorObject`
 
 **Vite plugin** (`three-path-editor/vite`, Node, dev server only)
 

@@ -129,7 +129,7 @@ describe('EditorHistory', () => {
 
 describe('undo shortcuts', () => {
   it('maps Cmd/Ctrl+Z, Shift+Cmd/Ctrl+Z and Ctrl+Y by physical key', () => {
-    const target = { undo: vi.fn(), redo: vi.fn(), deleteSelectedWaypoint: vi.fn(), clearWaypointSelection: vi.fn(), addWaypoint: vi.fn(), selectAdjacentWaypoint: vi.fn(), shiftSelectedWaypoint: vi.fn(), toggleView: vi.fn() };
+    const target = { undo: vi.fn(), redo: vi.fn(), deleteSelectedWaypoint: vi.fn(), clearWaypointSelection: vi.fn(), addWaypoint: vi.fn(), selectAdjacentWaypoint: vi.fn(), shiftSelectedWaypoint: vi.fn(), toggleView: vi.fn(), toggleGizmoMode: vi.fn() };
     const element = new EventTarget() as unknown as HTMLElement;
     const off = bindShortcuts(target, element);
     const fire = (init: Record<string, unknown>) => {

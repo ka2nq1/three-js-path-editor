@@ -25,6 +25,7 @@ import type { Waypoint } from '../core/Waypoint';
 import type { HandleKind } from '../editor/EditorState';
 import { Orienter } from '../runtime/orientation';
 import { add, type Vec3 } from '../utils/vec3';
+import { pathUp } from './placement';
 import { worldUnitsPerPixel } from './screen';
 
 export interface PathRenderStyle {
@@ -47,6 +48,9 @@ export interface PathRenderStyle {
   /** Bank (roll) indicator width in screen pixels. */
   bankSize: number;
   bankColor: ColorRepresentation;
+  /** Facing arrow length in screen pixels (waypoints with a `yaw`). */
+  facingSize: number;
+  facingColor: ColorRepresentation;
   /** Label height in screen pixels. */
   labelSize: number;
   lineOpacity: number;
@@ -71,6 +75,8 @@ export const DEFAULT_PATH_STYLE: PathRenderStyle = {
   arrowSize: 14,
   bankSize: 34,
   bankColor: 0xffc933,
+  facingSize: 26,
+  facingColor: 0x4cff88,
   labelSize: 16,
   lineOpacity: 1,
   depthTest: false,
@@ -83,6 +89,8 @@ export interface ThreePathRendererOptions {
   showLine?: boolean;
   showPoints?: boolean;
   showArrows?: boolean;
+  /** Facing arrows on waypoints that carry a `yaw`. Default true. */
+  showFacings?: boolean;
   showLabels?: boolean;
   showDebug?: boolean;
   /** World distance between direction arrows. 'auto' = 12 arrows per path. */
@@ -107,6 +115,8 @@ export function defaultWaypointLabel({ path, waypoint, index }: WaypointLabelCon
   let text = index === 0 ? `${path.name ?? path.id} · 0` : String(index);
   if (waypoint.speed !== undefined) text += ` ×${+waypoint.speed.toFixed(2)}`;
   if (waypoint.roll) text += ` ↻${+waypoint.roll.toFixed(1)}°`;
+  if (waypoint.yaw !== undefined) text += ` ∠${+waypoint.yaw.toFixed(1)}°`;
+  if (waypoint.time !== undefined) text += ` @${+waypoint.time.toFixed(2)}`;
   return text;
 }
 
@@ -123,6 +133,7 @@ const Z_AXIS = new Vector3(0, 0, 1);
 const _bankQ = new Quaternion();
 const _v = new Vector3();
 const _dir = new Vector3();
+const _up = new Vector3();
 
 /**
  * Draws one Path into its own Group: line, waypoint markers, direction arrows,
@@ -147,7 +158,8 @@ export class ThreePathRenderer {
   /** "Wing" bar along local X with a small up tick, for roll indicators. */
   private readonly wing = new BoxGeometry(1, 0.05, 0.05);
   private readonly orienter = new Orienter();
-  private readonly materials: Record<'point' | 'start' | 'selectedPoint' | 'handle' | 'arrow' | 'bank', MeshBasicMaterial>;
+  private yawFrame: { up: Vector3; orienter: Orienter } | null = null;
+  private readonly materials: Record<'point' | 'start' | 'selectedPoint' | 'handle' | 'arrow' | 'bank' | 'facing', MeshBasicMaterial>;
   private readonly lineMaterial: LineBasicMaterial;
   private readonly auxLineMaterial: LineBasicMaterial;
   private readonly line: Line;
@@ -157,6 +169,7 @@ export class ThreePathRenderer {
   private readonly handleGroup = new Group();
   private readonly debugGroup = new Group();
   private readonly bankGroup = new Group();
+  private readonly facingGroup = new Group();
   private readonly labelTextures = new Map<string, CanvasTexture>();
   /** Objects whose scale follows the camera: [object, size in px]. */
   private scaled: [Object3D, number][] = [];
@@ -169,6 +182,7 @@ export class ThreePathRenderer {
       showLine: options.showLine ?? true,
       showPoints: options.showPoints ?? true,
       showArrows: options.showArrows ?? true,
+      showFacings: options.showFacings ?? true,
       showLabels: options.showLabels ?? false,
       showDebug: options.showDebug ?? false,
       arrowSpacing: options.arrowSpacing ?? 'auto',
@@ -185,6 +199,7 @@ export class ThreePathRenderer {
       handle: mesh(s.handleColor),
       arrow: mesh(s.arrowColor),
       bank: mesh(s.bankColor),
+      facing: mesh(s.facingColor),
     };
     this.lineMaterial = new LineBasicMaterial({
       color: s.lineColor,
@@ -204,7 +219,16 @@ export class ThreePathRenderer {
     this.tag(this.line, { kind: 'line' });
     this.group.name = `PathEditor:path:${path.id}`;
     this.group.userData.pathEditor = true;
-    this.group.add(this.debugGroup, this.line, this.arrowGroup, this.bankGroup, this.pointGroup, this.handleGroup, this.labelGroup);
+    this.group.add(
+      this.debugGroup,
+      this.line,
+      this.arrowGroup,
+      this.bankGroup,
+      this.facingGroup,
+      this.pointGroup,
+      this.handleGroup,
+      this.labelGroup,
+    );
   }
 
   setOptions(options: Partial<ThreePathRendererOptions>): void {
@@ -314,6 +338,7 @@ export class ThreePathRenderer {
 
     this.buildArrows(toWorld);
     this.buildBank(toWorld);
+    this.buildFacings(toWorld);
     this.buildHandles(toWorld);
     this.buildLabels(toWorld);
     this.buildDebug(toWorld);
@@ -357,6 +382,31 @@ export class ThreePathRenderer {
       this.bankGroup.add(bar);
       this.scaled.push([bar, this.style.bankSize]);
     });
+  }
+
+  /** Arrows showing the authored facing (`yaw`) of waypoints that carry one. */
+  private buildFacings(toWorld: (p: Vec3) => Vec3): void {
+    const { path } = this;
+    this.facingGroup.clear();
+    if (!this.options.showFacings || !this.options.showPoints) return;
+    for (const [i, wp] of path.waypoints.entries()) {
+      if (wp.yaw === undefined) continue;
+      if (!this.yawOrienter().yawTo((wp.yaw * Math.PI) / 180, _bankQ)) continue;
+      const arrow = this.tag(new Mesh(this.cone, this.materials.facing), { kind: 'waypoint', waypointIndex: i });
+      arrow.position.fromArray(toWorld(wp.position));
+      arrow.quaternion.copy(_bankQ);
+      this.facingGroup.add(arrow);
+      this.scaled.push([arrow, this.style.facingSize]);
+    }
+  }
+
+  /** Yaw is measured around the path's up axis, which the 2D plane can change. */
+  private yawOrienter(): Orienter {
+    const up = pathUp(this.coordinates, this.path.dimension, _up);
+    if (!this.yawFrame || !this.yawFrame.up.equals(up)) {
+      this.yawFrame = { up: up.clone(), orienter: new Orienter({ worldUp: up.toArray(), yawOnly: true }) };
+    }
+    return this.yawFrame.orienter;
   }
 
   private buildHandles(toWorld: (p: Vec3) => Vec3): void {

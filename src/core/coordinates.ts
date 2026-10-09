@@ -1,4 +1,4 @@
-import type { Vec3 } from '../utils/vec3';
+import { set, type Vec3 } from '../utils/vec3';
 import type { PathDimension } from './types';
 
 /**
@@ -7,10 +7,15 @@ import type { PathDimension } from './types';
  * Implement this interface for custom conventions.
  */
 export interface CoordinateSystem {
-  toWorld(point: Vec3, dimension: PathDimension): Vec3;
-  toPath(point: Vec3, dimension: PathDimension): Vec3;
+  /**
+   * Every converter takes an optional output vector, writes into it and
+   * returns it, so per-frame conversion allocates nothing. Without one it
+   * returns a new vector.
+   */
+  toWorld(point: Vec3, dimension: PathDimension, out?: Vec3): Vec3;
+  toPath(point: Vec3, dimension: PathDimension, out?: Vec3): Vec3;
   /** Converts a direction (no translation). */
-  directionToWorld(direction: Vec3, dimension: PathDimension): Vec3;
+  directionToWorld(direction: Vec3, dimension: PathDimension, out?: Vec3): Vec3;
   /** World-space normal of the plane 2D paths live on. */
   readonly planeNormal: Vec3;
 }
@@ -39,29 +44,28 @@ export function createCoordinateSystem(options: CoordinateSystemOptions = {}): C
   const origin = options.origin ?? [0, 0, 0];
   const s = options.scale ?? 1;
 
-  const dirToWorld = (d: Vec3, dim: PathDimension): Vec3 => {
-    if (dim === 3) return [d[0] * s, d[1] * s, d[2] * s];
-    return plane === 'xz' ? [d[0] * s, 0, d[1] * s] : [d[0] * s, d[1] * s, 0];
+  const dirToWorld = (d: Vec3, dim: PathDimension, out?: Vec3): Vec3 => {
+    const target = out ?? ([0, 0, 0] as Vec3);
+    if (dim === 3) return set(target, d[0] * s, d[1] * s, d[2] * s);
+    return plane === 'xz' ? set(target, d[0] * s, 0, d[1] * s) : set(target, d[0] * s, d[1] * s, 0);
   };
 
   return {
     planeNormal: plane === 'xz' ? [0, 1, 0] : [0, 0, 1],
     directionToWorld: dirToWorld,
-    toWorld(p, dim) {
-      const d = dirToWorld(p, dim);
-      const out: Vec3 = [origin[0] + d[0], origin[1] + d[1], origin[2] + d[2]];
-      if (dim === 2) {
-        if (plane === 'xz') out[1] += elevation;
-        else out[2] += elevation;
-      }
-      return out;
+    toWorld(p, dim, out) {
+      const target = dirToWorld(p, dim, out);
+      set(target, origin[0] + target[0], origin[1] + target[1], origin[2] + target[2]);
+      if (dim === 2) target[plane === 'xz' ? 1 : 2] += elevation;
+      return target;
     },
-    toPath(w, dim) {
+    toPath(w, dim, out) {
       const x = (w[0] - origin[0]) / s;
       const y = (w[1] - origin[1]) / s;
       const z = (w[2] - origin[2]) / s;
-      if (dim === 3) return [x, y, z];
-      return plane === 'xz' ? [x, z, 0] : [x, y, 0];
+      const target = out ?? ([0, 0, 0] as Vec3);
+      if (dim === 3) return set(target, x, y, z);
+      return plane === 'xz' ? set(target, x, z, 0) : set(target, x, y, 0);
     },
   };
 }

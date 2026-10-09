@@ -1,5 +1,7 @@
 import { Plane, Raycaster, Vector3, type Object3D } from 'three';
+import type { CoordinateSystem } from '../core/coordinates';
 import type { Path } from '../core/Path';
+import type { PathDimension } from '../core/types';
 
 export interface PlacementContext {
   /** Ray through the clicked pixel. */
@@ -31,6 +33,26 @@ export interface PlanePlacementOptions {
 }
 
 const _hit = new Vector3();
+
+/**
+ * World up a path's yaw is measured around: the plane normal for 2D paths, the
+ * coordinate system's up for 3D ones.
+ */
+export function pathUp(coordinates: CoordinateSystem, dimension: PathDimension, target = new Vector3()): Vector3 {
+  if (dimension === 2) return target.fromArray(coordinates.planeNormal).normalize();
+  return target.fromArray(coordinates.directionToWorld([0, 1, 0], 3)).normalize();
+}
+
+/**
+ * True for objects the editor itself drew (markers, gizmo, grid, previews).
+ * Host raycasts — placement, constraints, a pivot under the cursor — must skip
+ * them, and the editor tags only the roots it adds to the scene, so the check
+ * walks up the parents.
+ */
+export function isEditorObject(object: Object3D | null): boolean {
+  for (let o = object; o; o = o.parent) if (o.userData.pathEditor) return true;
+  return false;
+}
 
 /** Places waypoints on a mathematical plane. Default provider. */
 export function planePlacement(options: PlanePlacementOptions = {}): PlacementProvider {
@@ -67,7 +89,7 @@ export function objectPlacement(
   return (ctx) => {
     const targets = typeof objects === 'function' ? objects() : objects;
     const hits = ctx.raycaster.intersectObjects(targets, options.recursive ?? true);
-    const hit = hits.find((h) => !h.object.userData.pathEditor);
+    const hit = hits.find((h) => !isEditorObject(h.object));
     if (hit) {
       const point = hit.point.clone();
       if (options.surfaceOffset && hit.face) {
@@ -126,7 +148,7 @@ export function surfaceConstraint(
     const targets = typeof objects === 'function' ? objects() : objects;
     raycaster.set(position.clone().addScaledVector(up, castHeight), down);
     raycaster.far = castHeight * 2;
-    const hit = raycaster.intersectObjects(targets, options.recursive ?? true).find((h) => !h.object.userData.pathEditor);
+    const hit = raycaster.intersectObjects(targets, options.recursive ?? true).find((h) => !isEditorObject(h.object));
     if (!hit) return null;
     return hit.point.clone().addScaledVector(up, options.offset ?? 0);
   };
