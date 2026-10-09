@@ -1,6 +1,6 @@
 # three-path-editor: notes for development
 
-Commands: `npm test`, `npm run typecheck`, `npm run build`, `npm run demo`, `node bin/path-editor.mjs doctor`.
+Commands: `npm test`, `npm run typecheck`, `npm run build`, `npm run demo`, `node bin/path-editor.mjs doctor`, `npm run release:vendor -- <creative-dir>`.
 
 ## Invariants (keep these)
 
@@ -17,5 +17,5 @@ Commands: `npm test`, `npm run typecheck`, `npm run build`, `npm run demo`, `nod
 - Editor methods that edit on behalf of the user go through `allow()` (`canEdit`) and, for positions, `constrained()`. Direct `Path` calls stay unchecked.
 - No object-specific behaviour (vehicles, NPCs...) in the package. Model differences go through `OrientationOptions`.
 - Mutate paths through `Path` methods (or call `markChanged()`), so caches and renderers stay in sync.
-- The CLI is dependency-free and non-destructive (never overwrite or delete).
+- The CLI is dependency-free and non-destructive (never overwrite or delete). `scripts/release-vendor.mjs` is dependency-free too, is not shipped in `files`, and only deletes the tarballs it supersedes, under `--prune`.
 - Keep `skills/` in sync with the public API. It's how Claude integrates this package into other projects.

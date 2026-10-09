@@ -77,6 +77,7 @@
     "demo": "vite --config examples/demo/vite.config.ts",
     "demo:build": "vite build --config examples/demo/vite.config.ts",
     "doctor": "node bin/path-editor.mjs doctor",
+    "release:vendor": "node scripts/release-vendor.mjs",
     "prepare": "npm run build"
   },
   "peerDependencies": {

@@ -36,6 +36,7 @@ A reusable, framework-agnostic **path editor and path follower for existing Thre
 - [CLI](#cli)
 - [Troubleshooting](#troubleshooting)
 - [API overview](#api-overview)
+- [Releasing into a creative](#releasing-into-a-creative-vendored-tarball)
 - [Development](#development)
 
 ---
@@ -785,6 +786,43 @@ Full list: [skills/troubleshooting.md](skills/troubleshooting.md).
 - `pathEditorSavePlugin({ file, endpoint?, indent?, maxBytes?, writeFile? })`
 - `EditorState`, `EditorHistory`, `insertWaypointAfter`, `insertWaypointAtT`, `suggestWaypointPosition`, `shiftWaypoint`, `bindShortcuts`
 
+## Releasing into a creative (vendored tarball)
+
+Platforms that build an uploaded zip run `npm install` with no access to a private registry. The package travels inside the creative instead: `npm pack` produces `three-path-editor-<version>.tgz`, the file sits in the creative's `vendor/` folder, and its package.json points at it.
+
+```json
+"three-path-editor": "file:vendor/three-path-editor-0.4.0.tgz"
+```
+
+`npm i` unpacks that tarball into `node_modules` and records the path and its integrity hash in `package-lock.json`. The packer puts `vendor/` into the uploaded zip, so the platform's `npm install` finds the file next to the manifest. The tarball carries a prebuilt `dist` (npm does not run `prepare` for a tarball dependency), so the platform needs none of this package's dev dependencies.
+
+One command does the whole round trip:
+
+```bash
+npm run release:vendor -- ../my-creative --bump minor --prune
+```
+
+It runs `npm test` and `npm run typecheck`, bumps the version (`npm version`, which commits and tags), packs — `npm pack` runs `prepare`, so `dist` is always fresh — drops the tarball into `../my-creative/vendor/`, rewrites the dependency line, deletes the previous tarball with `--prune`, and warns if `vendor/` is in the creative's `.gitignore`.
+
+```
+--bump <patch|minor|major|x.y.z>  bump this package's version first
+--no-tag                          bump without a git commit and tag
+--skip-tests                      don't run `npm test` and `npm run typecheck`
+--prune                           delete older tarballs of this package from vendor/
+--vendor <dir>                    vendor folder inside the creative (default: vendor)
+--install                         run `npm install` in the creative afterwards
+--dry-run                         report what would happen, change nothing
+```
+
+Then, in the creative: `npm i` (which updates `package-lock.json`) and `npm run build`, and reupload.
+
+What bites:
+
+- **Bump the version every time.** The tarball's name carries it; reusing a name can leave npm with the previous unpacked copy. If you must repack the same version: `rm -rf node_modules/three-path-editor && npm i --force`.
+- **Commit the creative's `package-lock.json` together with the tarball.** The lock holds the file path; if it names a tarball that is no longer there, `npm ci` on the platform fails with `ENOENT`.
+- `three` is a peer dependency — the creative installs its own, r150 or newer.
+- Production code imports `three-path-editor`, not `/editor` (see [Production / runtime usage](#production--runtime-usage)); the editor entry pulls in the panel, the gizmos and `three/examples/jsm`.
+
 ## Development
 
 ```bash
@@ -794,6 +832,7 @@ npm test             # vitest
 npm run typecheck    # tsc --noEmit
 npm run build        # tsup → dist/ (ESM + .d.ts)
 npm run doctor       # run the CLI against this repo
+npm run release:vendor -- <creative-dir> [--bump minor] [--prune]
 ```
 
 Layout:
@@ -806,6 +845,7 @@ src/
   three/      PathEditor, ThreePathRenderer, PathPreview, PathEditorPanel, placement (three)
   utils/      vec3 math, emitter, ids
 bin/          path-editor CLI (plain Node, no deps)
+scripts/      release-vendor.mjs: pack into a creative's vendor/ (plain Node, no deps)
 skills/       Claude Code skill
 examples/demo Vite demo (for testing the package only)
 tests/        vitest suites

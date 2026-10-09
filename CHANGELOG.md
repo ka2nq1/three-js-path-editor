@@ -27,6 +27,8 @@
 - `SurfaceCheck` and the `surface` option tick every span of a curve that runs below the floors it was authored on (view `surface`, `editor.surfaceWarnings`) — the sag `curve.linearHeight` removes, which was invisible in the editor.
 - `isEditorObject(object)` tells host raycasts whether a hit belongs to the editor; `objectPlacement` and `surfaceConstraint` now use it, so a hit on a marker inside the editor's groups is skipped too.
 
+- `npm run release:vendor -- <creative-dir>` ([scripts/release-vendor.mjs](scripts/release-vendor.mjs)) tests, bumps, packs the package into a creative's `vendor/` folder and repoints its package.json at the tarball, for platforms that run `npm install` on an uploaded zip without a registry. See [Releasing into a creative](README.md#releasing-into-a-creative-vendored-tarball).
+
 ### Fixed
 
 - `disable()` ended a `TransformControls` drag by switching the controls off, which made them ignore the `pointerup` and stay `dragging` forever: after the next `enable()` the move gizmo never grabbed a press again. The drag is now ended first.
