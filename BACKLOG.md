@@ -44,6 +44,8 @@ feature makes unnecessary.
 | 21 | No single-point marker type | `kind: 'marker'`, `createMarker()`, `markers` / `routes`, **+ Marker** | one-point paths with curve noise |
 | 22 | No camera-rig pairing or preview through the scene camera | `CameraRig`, `addRig`, `playRig`, sight lines | restarting the game to judge framing |
 | 23 | Syncing two paths by length was guesswork | `Waypoint.time` and the `Path` time API, used by rigs | sampling two paths by index |
+| 24 | The panel is one fixed block: a host with its own dev tool has nowhere to put it | `PathEditorPanel.addTab({ label, element })`, `activeTab`, `selectTab`, `tabLabel` (0.5.0) | `EditorTabs.ts` prepending a strip to `panel.element` from outside |
+| 25 | Dressing a rig's interchangeable meshes was a creative-side dev panel of its own | the Visuals tab: `VisualsEditor`, `VisualsPanel`, the visuals file, `visualsSavePlugin`, `meshSetsOf` / `applyVisuals`, `path-editor meshes` (0.5.0) | `CharacterVisualEditorC.ts`, `CharacterVisual.redress` |
 
 Markers are a `Path` with `kind: 'marker'` rather than a parallel entity: that
 keeps one file, one selection, one gizmo and one undo stack, and the editor

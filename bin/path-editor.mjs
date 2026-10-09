@@ -4,6 +4,7 @@
  *
  *   path-editor doctor [--json]              inspect the current project
  *   path-editor init [--dir <paths dir>] [--no-skill] [--dry-run]
+ *   path-editor meshes <model.glb> [--json]  list the mesh sets a model carries
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -12,6 +13,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const PKG_NAME = 'three-path-editor';
 const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SKILL_FILES = ['SKILL.md', 'integration.md', 'routes.md', 'troubleshooting.md'];
+const VISUALS_SKILL_NAME = `${PKG_NAME}-visuals`;
+const VISUALS_SKILL_FILES = ['SKILL.md'];
 const SOURCE_EXT = /\.(m?[jt]sx?|vue|svelte)$/;
 const IGNORED_DIRS = new Set(['node_modules', 'dist', 'build', 'out', '.git', '.next', '.nuxt', '.vite', 'coverage', '.cache', '.turbo']);
 const MAX_FILES = 5000;
@@ -306,18 +309,8 @@ function init() {
   }
 
   if (!flag('no-skill')) {
-    const skillDir = join(root, '.claude', 'skills', PKG_NAME);
-    for (const name of SKILL_FILES) {
-      const target = join(skillDir, name);
-      const source = join(PKG_ROOT, 'skills', name);
-      if (existsSync(target)) info(`${relative(root, target)} exists — skipped.`);
-      else if (existsSync(source)) {
-        act(`add ${relative(root, target)}`, () => {
-          mkdirSync(skillDir, { recursive: true });
-          copyFileSync(source, target);
-        });
-      }
-    }
+    installSkill(root, PKG_NAME, SKILL_FILES, 'skills', act);
+    installSkill(root, VISUALS_SKILL_NAME, VISUALS_SKILL_FILES, join('skills', 'visuals'), act);
   }
 
   for (const a of actions) (dryRun ? info : ok)(a);
@@ -341,6 +334,88 @@ Next steps
 `);
 }
 
+function installSkill(root, name, files, sourceDir, act) {
+  const skillDir = join(root, '.claude', 'skills', name);
+  for (const file of files) {
+    const target = join(skillDir, file);
+    const source = join(PKG_ROOT, sourceDir, file);
+    if (existsSync(target)) info(`${relative(root, target)} exists — skipped.`);
+    else if (existsSync(source)) {
+      act(`add ${relative(root, target)}`, () => {
+        mkdirSync(skillDir, { recursive: true });
+        copyFileSync(source, target);
+      });
+    }
+  }
+}
+
+// ------------------------------------------------------------------ meshes
+
+/**
+ * The mesh sets a glTF/GLB carries, by name: what the editor's Visuals tab
+ * offers and what a visuals file's `worn` entries are written against. Reads
+ * the JSON chunk itself, so the CLI stays dependency-free; Draco or any other
+ * compression only touches the geometry, never the node names.
+ */
+function readGltfMeshNames(file) {
+  const buffer = readFileSync(file);
+  let json;
+  if (buffer.length > 12 && buffer.readUInt32LE(0) === 0x46546c67) {
+    for (let offset = 12; offset + 8 <= buffer.length; ) {
+      const length = buffer.readUInt32LE(offset);
+      const type = buffer.readUInt32LE(offset + 4);
+      if (type === 0x4e4f534a) {
+        json = JSON.parse(buffer.subarray(offset + 8, offset + 8 + length).toString('utf8'));
+        break;
+      }
+      offset += 8 + length;
+    }
+    if (!json) throw new Error('No JSON chunk in this GLB.');
+  } else {
+    json = JSON.parse(buffer.toString('utf8'));
+  }
+
+  const names = [];
+  for (const node of json.nodes ?? []) {
+    if (node.mesh === undefined || !node.name) continue;
+    // GLTFLoader strips dots from node names; match what the scene will hold.
+    const name = String(node.name).replace(/\./g, '');
+    if (!names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+function meshes() {
+  const file = args[1];
+  if (!file) {
+    bad('Usage: path-editor meshes <model.glb>');
+    process.exitCode = 1;
+    return;
+  }
+  if (!existsSync(file)) {
+    bad(`${file} does not exist.`);
+    process.exitCode = 1;
+    return;
+  }
+
+  let names;
+  try {
+    names = readGltfMeshNames(file);
+  } catch (err) {
+    bad(`Could not read ${file}: ${err.message}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (flag('json')) {
+    console.log(JSON.stringify({ file, sets: names }, null, 2));
+    return;
+  }
+  heading(`Mesh sets in ${file} (${names.length})`);
+  for (const name of names) info(name);
+  if (names.length === 0) warn('No named meshes: the Visuals tab will have nothing to dress.');
+}
+
 // -------------------------------------------------------------------- main
 
 function help() {
@@ -348,7 +423,8 @@ function help() {
 
 Usage:
   path-editor doctor [--json]      Inspect the project: Three.js, scene/camera/renderer/loop, path files, integration status
-  path-editor init [options]       Create a paths directory with an example file and install the Claude Code skill
+  path-editor init [options]       Create a paths directory with an example file and install the Claude Code skills
+  path-editor meshes <model.glb>   List the mesh sets a model carries, for the editor's Visuals tab (--json)
 
 Init options:
   --dir <dir>     Paths directory (default: src/paths, or paths/ without src/)
@@ -364,6 +440,9 @@ switch (command) {
     break;
   case 'init':
     init();
+    break;
+  case 'meshes':
+    meshes();
     break;
   default:
     help();

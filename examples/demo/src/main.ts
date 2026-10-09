@@ -48,21 +48,36 @@ function makeHelicopter(): THREE.Object3D {
   const g = new THREE.Group();
   const body = new THREE.Mesh(new THREE.CapsuleGeometry(1.2, 3, 4, 8), new THREE.MeshStandardMaterial({ color: 0xd9a640 }));
   body.rotation.x = Math.PI / 2;
+  body.name = 'body';
   const tail = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 4), body.material);
   tail.position.z = 3.5; // tail at +Z, so the nose points -Z
+  tail.name = 'tail';
   const rotor = new THREE.Mesh(new THREE.BoxGeometry(9, 0.1, 0.4), new THREE.MeshStandardMaterial({ color: 0x222222 }));
   rotor.position.y = 1.6;
   rotor.name = 'rotor';
-  g.add(body, tail, rotor);
+  // Two interchangeable sets for the Visuals tab: one or the other, not both.
+  const skids = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 4), new THREE.MeshStandardMaterial({ color: 0x555555 }));
+  skids.position.y = -1.4;
+  skids.name = 'skids';
+  const floats = new THREE.Mesh(new THREE.CapsuleGeometry(0.5, 3, 4, 8), new THREE.MeshStandardMaterial({ color: 0xcc4422 }));
+  floats.rotation.x = Math.PI / 2;
+  floats.position.y = -1.4;
+  floats.name = 'floats';
+  g.add(body, tail, rotor, skids, floats);
   return g;
 }
 function makeCar(): THREE.Object3D {
   const g = new THREE.Group();
   const body = new THREE.Mesh(new THREE.BoxGeometry(4, 1.2, 2), new THREE.MeshStandardMaterial({ color: 0x3f7fff }));
   body.position.y = 0.8;
+  body.name = 'body';
   const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.9, 1.8), new THREE.MeshStandardMaterial({ color: 0xa8c4ff }));
   cabin.position.set(-0.3, 1.8, 0); // cabin towards -X, so the car faces +X
-  g.add(body, cabin);
+  cabin.name = 'cabin';
+  const rack = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.15, 1.6), new THREE.MeshStandardMaterial({ color: 0x222222 }));
+  rack.position.set(-0.3, 2.3, 0);
+  rack.name = 'roof-rack';
+  g.add(body, cabin, rack);
   return g;
 }
 const helicopter = makeHelicopter();
@@ -81,7 +96,30 @@ const editor = new PathEditor({
   view: { grid: false, labels: true },
 });
 editor.enable();
-const panel = new PathEditorPanel(editor, { container: app });
+// The Visuals tab is on by default; here it is pointed at the two models and
+// a dressing. A real project also passes `source: 'Characters.glb'` — the
+// model the sets come from, which the tab names when something is missing.
+// Drop the `visuals` option entirely to see what it says with nothing set up.
+const panel = new PathEditorPanel(editor, {
+  container: app,
+  visuals: {
+    subjects: [
+      { id: 'helicopter', object: helicopter },
+      { id: 'car', object: car },
+    ],
+    data: {
+      version: 1,
+      subjects: [
+        { id: 'helicopter', worn: ['body', 'tail', 'rotor', 'skids'] },
+        { id: 'car', worn: ['body', 'cabin'] },
+      ],
+    },
+    file: 'examples/demo/src/demo.visuals.json',
+    exclusive: [['skids', 'floats']],
+    onExport: (json: string) => console.log(json),
+  },
+});
+
 // Exposed for poking around in devtools.
 Object.assign(window, { demo: { editor, scene, camera, renderer, THREE } });
 

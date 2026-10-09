@@ -19,6 +19,7 @@ Companion files in this folder:
 - [integration.md](integration.md): step-by-step integration patterns (plain Three.js, class-based engines, React Three Fiber, Vite/webpack guards).
 - [routes.md](routes.md): route JSON format, where to keep files, loading them, following them.
 - [troubleshooting.md](troubleshooting.md): symptom → cause → fix table.
+- [visuals/SKILL.md](visuals/SKILL.md): a separate skill (`three-path-editor-visuals`) for the editor's Visuals tab — authoring which meshes of a model are drawn, the visuals file, and dressing objects from it at runtime.
 
 ---
 

@@ -30,6 +30,7 @@ A reusable, framework-agnostic **path editor and path follower for existing Thre
 - [Authored times and camera rigs](#authored-times-and-camera-rigs)
 - [PathFollower](#pathfollower)
 - [Preview objects](#preview-objects)
+- [Visuals: dressing a model's mesh sets](#visuals-dressing-a-models-mesh-sets)
 - [2D paths](#2d-paths) · [3D paths](#3d-paths)
 - [Production / runtime usage](#production--runtime-usage)
 - [AI / Claude Code integration](#ai--claude-code-integration)
@@ -640,6 +641,54 @@ preview.on('reset', () => enemy.snapToStart());
 - `detachPreview()` on a playing preview fires `previewstate` with `playing: false` (and the preview's own `pause`) before `preview` with `null`. A detached preview's listeners are removed.
 - Listeners added with `preview.on()` survive `setPath` / `editor.previewPath()`.
 
+## Visuals: dressing a model's mesh sets
+
+A model often carries more than it wears: one character rig with four head
+covers, one car with three bumpers. A **mesh set** is one named mesh on an
+object; a **visuals file** records which sets each object draws. The editor's
+**Visuals tab** authors that file, dressing the live objects as you tick them.
+
+**The tab is there as soon as the editor is.** With nothing configured it
+reads the scene for objects carrying more than one named mesh, and when there
+is nothing to dress it says so in the tab itself, naming the skill that sets
+visuals up and the model the meshes should come from. Point it at your own
+objects when you have them:
+
+```ts
+const panel = new PathEditorPanel(editor, {
+  visuals: {
+    subjects: () => cast.map((unit) => ({ id: unit.role, object: unit.root })),
+    data: visualsFile,                                // null / undefined is fine
+    file: 'src/visuals/characters.visuals.json',
+    source: 'Characters.glb',
+    exclusive: [['Helm001', 'Bandana', 'Bandana_2']], // at most one head cover
+    onSave: (json) => saveToDevServer(json, { endpoint: DEFAULT_VISUALS_SAVE_ENDPOINT }),
+  },
+});
+```
+
+`visuals: false` leaves the tab out; `panel.visuals` is the `VisualsEditor`
+behind it. `panel.addTab({ label, element })` puts any other host panel behind
+a tab of the same frame.
+
+**Nothing here throws.** No visuals file yet, a cast that is not built, a file
+written against an older model — each is reported inside the tab, with the one
+line that fixes it. Whatever can be dressed still is.
+
+`npx path-editor meshes <model.glb>` lists the sets a model carries, named the
+way `GLTFLoader` will hold them.
+
+In production the game dresses its own objects, with no editor code:
+
+```ts
+import { applyVisuals, readVisualsFile, wornOf } from 'three-path-editor';
+
+const file = readVisualsFile(data);
+applyVisuals(unit.root, wornOf(file, unit.role) ?? []);
+```
+
+See [skills/visuals/SKILL.md](skills/visuals/SKILL.md) for the full setup.
+
 ## 2D paths
 
 2D paths store `[x, y]` and live on a plane. The default is the XZ ground plane of Y-up scenes: path `[x, y]` → world `(x, 0, y)`.
@@ -691,11 +740,12 @@ The `skills/` folder is a Claude Code skill that tells Claude how to integrate t
 - [skills/integration.md](skills/integration.md): patterns for plain Three.js, class-based engines, React Three Fiber, bundler guards
 - [skills/routes.md](skills/routes.md): JSON format, file locations, authoring workflow, runtime loading
 - [skills/troubleshooting.md](skills/troubleshooting.md): symptom → cause → fix
+- [skills/visuals/SKILL.md](skills/visuals/SKILL.md): a second skill — set up the Visuals tab, the visuals file and runtime dressing
 
 Install the skill into a project (non-destructive):
 
 ```bash
-npx path-editor init        # copies skills/ to .claude/skills/three-path-editor/ and creates src/paths/example.paths.json
+npx path-editor init        # copies both skills to .claude/skills/ and creates src/paths/example.paths.json
 ```
 
 Then ask Claude Code something like *"Integrate three-path-editor into this game: edit routes in dev, make the helicopter follow `helicopter-route` in production."* The skill tells it to inspect the project first, run `npx path-editor doctor`, and make minimal changes.
@@ -706,6 +756,7 @@ Then ask Claude Code something like *"Integrate three-path-editor into this game
 npx path-editor doctor          # report
 npx path-editor doctor --json   # machine-readable
 npx path-editor init [--dir src/paths] [--no-skill] [--dry-run]
+npx path-editor meshes <model.glb> [--json]   # mesh sets for the Visuals tab
 ```
 
 `doctor` reports: Three.js version (declared/installed), package version, detected scene/camera/renderer/update loop/camera controls (with file:line), React Three Fiber, project structure, path JSON files (validated), unguarded editor imports, Claude skill status and overall integration status.

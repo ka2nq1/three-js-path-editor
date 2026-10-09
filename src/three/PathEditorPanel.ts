@@ -3,6 +3,14 @@ import type { CatmullRomParametrization, CurveType, Metadata } from '../core/typ
 import type { EditorViewOptions } from '../editor/EditorState';
 import { EDITOR_UI_ATTRIBUTE, type EditorAction, type PathEditor } from './PathEditor';
 import type { WaypointLabelContext } from './ThreePathRenderer';
+import { VisualsEditor, type VisualsEditorOptions } from './VisualsEditor';
+import { VisualsPanel, type VisualsPanelOptions } from './VisualsPanel';
+
+/** A host panel shown as a further tab of `PathEditorPanel` (`addTab`). */
+export interface PathEditorPanelTab {
+  label: string;
+  element: HTMLElement;
+}
 
 export interface PathEditorPanelOptions {
   /** Where to mount the panel. Default `document.body`. */
@@ -31,6 +39,18 @@ export interface PathEditorPanelOptions {
   hideWhenDisabled?: boolean;
   /** Extra text after `#i x, y, z` in the waypoint list (e.g. a name from metadata). */
   formatWaypoint?: (context: WaypointLabelContext) => string | null;
+  /** Label of the editor's own controls once `addTab` puts them behind a tab. Default 'Paths'. */
+  tabLabel?: string;
+  /**
+   * The Visuals tab, which authors which meshes of a model are drawn.
+   *
+   * It is **on by default**: with nothing configured it reads the scene for
+   * objects carrying more than one named mesh, and when there is nothing to
+   * dress it says so in the tab, naming the skill that sets visuals up. Pass
+   * options to point it at your own objects and file, a `VisualsEditor` you
+   * built yourself, or `false` to leave the tab out.
+   */
+  visuals?: VisualsEditor | (VisualsEditorOptions & VisualsPanelOptions) | false;
 }
 
 const VIEW_LABELS: [keyof EditorViewOptions, string][] = [
@@ -64,6 +84,9 @@ const CSS = `
 .tpe-panel button.tpe-danger{border-color:#7a2a36;color:#ff9aa8}.tpe-panel button.tpe-danger:hover{background:#4a1c24}
 .tpe-panel input[data-el=speed-wp],.tpe-panel input[data-el=roll],.tpe-panel input[data-el=yaw],.tpe-panel input[data-el=time]{width:54px}
 .tpe-panel button.tpe-on{border-color:#5a7ea8;background:#2d3d52}
+.tpe-tabs{display:flex;gap:4px;padding:6px 10px;border-bottom:1px solid #2c3442}
+.tpe-tabs button{flex:1}
+.tpe-panel.collapsed .tpe-tabs,.tpe-panel.collapsed [data-tpe-tab]{display:none}
 .tpe-panel textarea{font:11px/1.35 ui-monospace,monospace;color:inherit;background:#252d3a;border:1px solid #364052;border-radius:4px;padding:3px 5px;width:100%;box-sizing:border-box;min-height:44px;resize:vertical}
 .tpe-panel textarea.tpe-invalid{border-color:#b04454}
 .tpe-hint{color:#8b95a7;font-size:11px}.tpe-status{color:#9fd49f;min-height:14px}
@@ -79,6 +102,10 @@ export class PathEditorPanel {
   private readonly editor: PathEditor;
   private readonly options: PathEditorPanelOptions;
   private readonly unsubscribers: (() => void)[] = [];
+  private readonly tabs: PathEditorPanelTab[] = [];
+  private visualsEditor: VisualsEditor | null = null;
+  private visualsPanel: VisualsPanel | null = null;
+  private tab = 0;
   private frame = 0;
 
   constructor(editor: PathEditor, options: PathEditorPanelOptions = {}) {
@@ -102,6 +129,7 @@ export class PathEditorPanel {
     for (const type of ['change', 'select', 'view', 'pathadded', 'pathremoved', 'preview', 'previewstate', 'enabled', 'history', 'gizmomode', 'rigstate'] as const) {
       this.unsubscribers.push(editor.on(type, () => this.scheduleRefresh()));
     }
+    this.addVisualsTab();
     if (options.hideWhenDisabled) {
       this.unsubscribers.push(editor.on('enabled', (enabled) => this.setVisible(enabled)));
       this.setVisible(editor.enabled);
@@ -125,6 +153,63 @@ export class PathEditorPanel {
     this.$('rig-play').textContent = flying ? 'Stop' : 'Fly';
   }
 
+  /**
+   * Puts a host panel in this one as a further tab: a dev tool that belongs
+   * next to the routes (object visuals, spawn tables, lighting) shares the
+   * frame, the corner and the show/hide the editor already drives, instead of
+   * stacking a second floating box over it. The element is appended to the
+   * panel and shown only while its tab is picked; the editor's own controls
+   * become the first tab, labelled by `tabLabel`.
+   *
+   * The host owns the element: this panel never writes into it.
+   */
+  addTab(tab: PathEditorPanelTab): void {
+    this.tabs.push(tab);
+    tab.element.setAttribute('data-tpe-tab', '');
+    this.element.appendChild(tab.element);
+    this.renderTabs();
+    this.selectTab(this.tab);
+  }
+
+  /** The Visuals tab's state, unless it was switched off. */
+  get visuals(): VisualsEditor | null {
+    return this.visualsEditor;
+  }
+
+  // Built here rather than left to the host: a project that installs the
+  // package gets the tab, and the tab itself says what to do when there is
+  // nothing in it yet.
+  private addVisualsTab(): void {
+    const option = this.options.visuals;
+    if (option === false) return;
+    const config = option instanceof VisualsEditor ? null : (option ?? {});
+    this.visualsEditor = config ? new VisualsEditor({ scene: this.editor.scene, ...config }) : (option as VisualsEditor);
+    this.visualsPanel = new VisualsPanel(this.visualsEditor, config ?? {});
+    this.addTab(this.visualsPanel.tab);
+  }
+
+  /** 0 is the editor's own controls, 1.. are the tabs added by the host. */
+  get activeTab(): number {
+    return this.tab;
+  }
+
+  selectTab(index: number): void {
+    this.tab = Math.max(0, Math.min(index, this.tabs.length));
+    this.$('body').style.display = this.tab === 0 ? '' : 'none';
+    this.tabs.forEach((tab, i) => (tab.element.style.display = this.tab === i + 1 ? '' : 'none'));
+    this.$('tabs')
+      .querySelectorAll('button')
+      .forEach((button, i) => button.classList.toggle('tpe-on', i === this.tab));
+  }
+
+  private renderTabs(): void {
+    const strip = this.$('tabs');
+    strip.style.display = this.tabs.length > 0 ? '' : 'none';
+    strip.innerHTML = [this.options.tabLabel ?? 'Paths', ...this.tabs.map((tab) => tab.label)]
+      .map((label, i) => `<button data-act="tab" data-tab="${i}">${esc(label)}</button>`)
+      .join('');
+  }
+
   /** Shows or hides the panel without disposing it. */
   setVisible(visible: boolean): void {
     this.element.style.display = visible ? '' : 'none';
@@ -133,6 +218,9 @@ export class PathEditorPanel {
   dispose(): void {
     cancelAnimationFrame(this.frame);
     for (const off of this.unsubscribers) off();
+    this.visualsPanel?.dispose();
+    // A `VisualsEditor` the host built is the host's to dispose.
+    if (!(this.options.visuals instanceof VisualsEditor)) this.visualsEditor?.dispose();
     this.element.remove();
   }
 
@@ -262,7 +350,11 @@ export class PathEditorPanel {
       editor.select(path.id, Number(row.dataset.idx));
       return;
     }
-    switch (target.closest('[data-act]')?.getAttribute('data-act')) {
+    const act = target.closest('[data-act]');
+    switch (act?.getAttribute('data-act')) {
+      case 'tab':
+        this.selectTab(Number(act.getAttribute('data-tab')));
+        break;
       case 'collapse':
         this.element.classList.toggle('collapsed');
         break;
@@ -423,7 +515,8 @@ export class PathEditorPanel {
     ).join('');
     return `
 <header data-act="collapse"><span>${esc(this.options.title ?? 'Path Editor')}</span><span>▾</span></header>
-<div class="tpe-body">
+<nav class="tpe-tabs" data-el="tabs" style="display:none"></nav>
+<div class="tpe-body" data-el="body">
   <section>
     <div class="tpe-row">
       <button data-act="enabled" data-el="enabled">Editor</button>

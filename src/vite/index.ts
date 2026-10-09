@@ -1,7 +1,10 @@
 import { readPathFile } from '../core/serialization';
+import { readVisualsFile } from '../core/visuals';
 
 /** Default endpoint shared by the plugin and `saveToDevServer`. */
 export const DEFAULT_SAVE_ENDPOINT = '/__path-editor/save';
+/** Default endpoint of the Visuals tab's save. */
+export const DEFAULT_VISUALS_SAVE_ENDPOINT = '/__path-editor/save-visuals';
 
 export interface PathEditorSavePluginOptions {
   /** Path file to overwrite. Relative paths resolve against the directory Vite was started from. */
@@ -52,10 +55,36 @@ export interface PathEditorSavePlugin {
  * ```
  */
 export function pathEditorSavePlugin(options: PathEditorSavePluginOptions): PathEditorSavePlugin {
-  const endpoint = options.endpoint ?? DEFAULT_SAVE_ENDPOINT;
+  return savePlugin('three-path-editor:save', options.endpoint ?? DEFAULT_SAVE_ENDPOINT, options, readPathFile);
+}
+
+/**
+ * The same, for the editor's Visuals tab: the picked mesh sets are POSTed as
+ * a visuals file, validated with the parser the game uses and written to
+ * `file`.
+ *
+ * ```ts
+ * visualsSavePlugin({ file: 'src/visuals/characters.visuals.json' });
+ * ```
+ */
+export function visualsSavePlugin(options: PathEditorSavePluginOptions): PathEditorSavePlugin {
+  return savePlugin(
+    'three-path-editor:save-visuals',
+    options.endpoint ?? DEFAULT_VISUALS_SAVE_ENDPOINT,
+    options,
+    readVisualsFile,
+  );
+}
+
+function savePlugin(
+  name: string,
+  endpoint: string,
+  options: PathEditorSavePluginOptions,
+  validate: (parsed: unknown) => unknown,
+): PathEditorSavePlugin {
   const maxBytes = options.maxBytes ?? 10 * 1024 * 1024;
   return {
-    name: 'three-path-editor:save',
+    name,
     apply: 'serve',
     configureServer(server) {
       server.middlewares.use(endpoint, (req, res) => {
@@ -69,7 +98,7 @@ export function pathEditorSavePlugin(options: PathEditorSavePluginOptions): Path
           size += text.length;
           if (size > maxBytes) {
             aborted = true;
-            reply(res, 413, `Path file larger than ${maxBytes} bytes.`);
+            reply(res, 413, `File larger than ${maxBytes} bytes.`);
             return;
           }
           body += text;
@@ -80,7 +109,7 @@ export function pathEditorSavePlugin(options: PathEditorSavePluginOptions): Path
         });
         req.on('end', () => {
           if (aborted) return;
-          savePathFile(body, options).then(
+          saveFile(body, options, validate).then(
             (file) => reply(res, 200, JSON.stringify({ file })),
             (error: unknown) => reply(res, 400, error instanceof Error ? error.message : String(error)),
           );
@@ -90,9 +119,13 @@ export function pathEditorSavePlugin(options: PathEditorSavePluginOptions): Path
   };
 }
 
-async function savePathFile(body: string, options: PathEditorSavePluginOptions): Promise<string> {
+async function saveFile(
+  body: string,
+  options: PathEditorSavePluginOptions,
+  validate: (parsed: unknown) => unknown,
+): Promise<string> {
   const parsed: unknown = JSON.parse(body);
-  readPathFile(parsed);
+  validate(parsed);
   const contents = JSON.stringify(parsed, null, options.indent ?? 2) + '\n';
   const file = await resolveFile(options.file);
   const write = options.writeFile ?? writeWithNode;

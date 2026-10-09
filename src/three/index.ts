@@ -10,6 +10,8 @@ export * from './FlyControls';
 export * from './CameraRig';
 export * from './PathEditor';
 export * from './PathEditorPanel';
+export * from './VisualsEditor';
+export * from './VisualsPanel';
 export * from './PathPreview';
 export * from './ThreePathRenderer';
 export * from './placement';

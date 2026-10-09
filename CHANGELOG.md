@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+
+- **Visuals**: a model's interchangeable meshes — a rig's head covers, a car's bumpers — are now authored in the editor. A **mesh set** is one named mesh on an object, a **visuals file** records which sets each object draws, and the editor's **Visuals tab** dresses the live objects as you tick them. `VisualsEditor`, `VisualsPanel`, the `visuals` JSON format (`readVisualsFile`, `serializeVisuals`, `stringifyVisuals`, `wornOf`, `emptyVisualsFile`), `visualsSavePlugin` for writing the file back from the dev server, and `meshSetsOf` / `applyVisuals` in the production entry so the game dresses its own objects with no editor code.
+- The Visuals tab is **on by default**, so a project that installs the package has it the moment the editor opens: with nothing configured it reads the scene for objects carrying more than one named mesh (`subjects: 'auto'`, `autoSubjects`), and when there is nothing to dress the tab says so and names the skill. `PathEditorPanel` option `visuals` (options, a `VisualsEditor`, or `false`) and `panel.visuals`.
+- The Visuals tab never throws. A missing or unreadable file, a cast that is not built yet, a file written against an older model: each is reported in the tab itself, with the one line that fixes it — which skill to apply, which model holds the meshes, where the file belongs (`VisualsEditor.problems`, `setupHint`). Whatever can be dressed still is.
+- `PathEditorPanel.addTab({ label, element })`, `activeTab`, `selectTab()` and the `tabLabel` option: a host's own dev panel shares the editor's frame, corner and show/hide instead of stacking a second floating box over it. The editor's controls become the first tab.
+- `path-editor meshes <model.glb> [--json]` lists the mesh sets a model carries, named the way `GLTFLoader` holds them (dots stripped), so a visuals file can be written without opening Blender.
+- A second Claude Code skill, `three-path-editor-visuals` ([skills/visuals/SKILL.md](skills/visuals/SKILL.md)), set up by `path-editor init` alongside the first.
+
 ## 0.4.0
 
 ### Added

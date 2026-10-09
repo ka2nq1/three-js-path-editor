@@ -6,6 +6,7 @@ export * from './PathCursor';
 export * from './ArcLengthTable';
 export * from './coordinates';
 export * from './serialization';
+export * from './visuals';
 export * from './curves';
 export { Emitter, type Listener } from '../utils/Emitter';
 export type { Vec3 } from '../utils/vec3';
